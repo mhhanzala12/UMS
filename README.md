@@ -140,6 +140,8 @@ UniversalMediaStudio/
 - **FFmpeg missing:** install FFmpeg, restart the app, and check Settings → Detected tools.
 - **Separate streams fail to merge:** install FFmpeg and ensure `ffmpeg` is on PATH.
 - **Encoder not found:** your FFmpeg build may not include that encoder; choose another codec or install a build with the required encoder.
+- **MP3 attached-picture streams:** FFmpeg reports embedded album art as video streams (often PNG/JPEG). These are cover images, not playable video. UMS audio-only conversion maps only the audio stream, so the pictures are not exported as video. The Music downloader uses one cover source at a time to avoid duplicate APIC artwork frames.
+- **Media Foundation `*_mf` messages:** `av1_mf`, `hevc_mf`, and `h264_mf` are FFmpeg's Windows Media Foundation encoder wrappers. UMS Auto mode does not select these wrappers; it prefers its configured software encoders and then supported NVENC/QSV/AMF encoders. A failed MFT probe alone does not mean a conversion failed—check the FFmpeg exit code and output validation. When a selected hardware encoder fails, choose a software encoder such as `libx264`, `libx265`, or `libsvtav1`.
 - **Unsupported or protected URL:** try a source that provides accessible, non-DRM media and check the yt-dlp error in the Queue activity log.
 
 ## Development checks
