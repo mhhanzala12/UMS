@@ -66,7 +66,7 @@ ApplicationWindow {
     property string searchQuery: ""
     property string searchKind: "All"
     property string spotifyUrl: ""
-    property string presetName: "Balanced Quality and Size"
+    property string presetName: "Best Available Quality"
     property var presets: JSON.parse(bridge.presetsJson())
     property var queueItems: JSON.parse(bridge.queueJson())
     property var settingsData: JSON.parse(bridge.settingsJson())
@@ -87,10 +87,24 @@ ApplicationWindow {
     property bool lyricsSynchronized: false
     property var lyricsLines: []
 
+    function normalizeTrackText(value) {
+        return String(value || "").toLowerCase()
+                .replace(/\\([^)]*\\)/g, " ")
+                .replace(/\\b(feat|ft|featuring)\\.?\\b.*$/g, " ")
+                .replace(/[^a-z0-9]+/g, " ")
+                .trim()
+    }
     function refreshLyricsSyncState() {
-        var sameTrack = playerPath.length > 0
-                && lyricsRequestedTitle.trim().toLowerCase() === playerTitle.trim().toLowerCase()
-                && lyricsRequestedArtist.trim().toLowerCase() === playerArtist.trim().toLowerCase()
+        var requestedTitle = normalizeTrackText(lyricsRequestedTitle)
+        var currentTitle = normalizeTrackText(playerTitle)
+        var requestedArtist = normalizeTrackText(lyricsRequestedArtist)
+        var currentArtist = normalizeTrackText(playerArtist)
+        var sameTitle = requestedTitle.length > 0 && currentTitle.length > 0
+                && (requestedTitle === currentTitle || requestedTitle.indexOf(currentTitle) === 0
+                    || currentTitle.indexOf(requestedTitle) === 0)
+        var sameArtist = !requestedArtist || !currentArtist || requestedArtist === currentArtist
+                || requestedArtist.indexOf(currentArtist) === 0 || currentArtist.indexOf(requestedArtist) === 0
+        var sameTrack = playerPath.length > 0 && sameTitle && sameArtist
         lyricsSynchronized = lyricsTimed && sameTrack
         if (lyricsTimed && !sameTrack)
             lyricsMessage = "Timed lyrics are available, but this is not the track currently loaded in the player."
@@ -1449,15 +1463,14 @@ ApplicationWindow {
                                 ComboBox {
                                     id: downloadPreset
                                     Layout.fillWidth: true
-                                    // Ignore malformed custom profile labels such as "gg." while
-                                    // preserving all named built-in and valid custom presets.
-                                    model: Object.keys(presets).filter(function(name) {
-                                        return name.length > 0 && name.length <= 48
-                                                && name.trim() === name
-                                                && name.indexOf("/") < 0 && name.indexOf("\\") < 0
-                                                && !/[<>:"|?*\u0000-\u001f]/.test(name)
-                                                && !name.endsWith(".")
-                                    });
+                                    // Keep the Download Profile list focused on the five supported profiles.
+                                    model: [
+                                        "Best Available Quality",
+                                        "Audio Only",
+                                        "Lossless Audio",
+                                        "3GP Legacy Mobile",
+                                        "MP4 Universal Compatibility"
+                                    ]
                                     currentIndex: Math.max(0, model.indexOf(presetName))
                                     onActivated: presetName = currentText
                                     background: Rectangle { radius: 7; color: themeColors.panel2; border.color: themeColors.border }
