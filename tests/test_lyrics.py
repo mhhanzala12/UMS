@@ -48,6 +48,15 @@ class ParseLrcTests(unittest.TestCase):
         self.assertEqual(parse_ttml("<tt><p>Untimed</p></tt>"), [])
         self.assertEqual(parse_ttml("<tt>"), [])
 
+    def test_match_score_preserves_non_latin_track_metadata(self):
+        score = lyric_match_score(
+            "আমার সোনার বাংলা",
+            "রবীন্দ্রনাথ ঠাকুর",
+            "আমার সোনার বাংলা",
+            "রবীন্দ্রনাথ ঠাকুর",
+        )
+        self.assertGreaterEqual(score, 0.99)
+
     def test_match_score_prefers_correct_artist_and_duration(self):
         exact = lyric_match_score("Song Name", "Correct Artist", "Song Name", "Correct Artist", 210, 211)
         wrong_artist = lyric_match_score("Song Name", "Correct Artist", "Song Name", "Other Artist", 210, 211)
