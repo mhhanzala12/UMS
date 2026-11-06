@@ -2385,7 +2385,6 @@ ApplicationWindow {
         durationMs: playerDuration
         playing: playerPlaying
         accentColor: themeColors.lime
-        mutedColor: themeColors.muted
         onSeekRequested: function(position) { bridge.seekPlayer(position) }
         onToggleRequested: bridge.togglePlayback()
         onPreviousRequested: bridge.playPrevious()
