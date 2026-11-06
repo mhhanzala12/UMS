@@ -13,7 +13,7 @@ import configparser
 import platform
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal, Slot, QUrl
+from PySide6.QtCore import QObject, QTimer, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import QFileDialog
@@ -22,10 +22,16 @@ from .config import load_settings, save_settings
 from .engine import tool_status
 from .music import (
     CatalogSearchWorker, CollectionWorker, LyricsSearchWorker, SpotifyResolveWorker,
-    load_music_playlists, save_music_playlists, scan_audio_library,
+    PLAYLISTS_KEY, load_music_playlists, save_music_playlists, scan_audio_library,
 )
 from .presets import merged_presets
-from .workers import AnalyzeWorker, MediaTaskWorker
+from .workers import AnalyzeWorker, FunctionWorker, MediaTaskWorker
+
+# Only the fields the QML queue/downloads view reads. The old queueJson() also
+# serialised every task's options dict and up to 80 log lines on each update.
+_QUEUE_FIELDS = ("id", "kind", "name", "status", "progress", "detail", "output", "outputs",
+                 "group_id", "group_name", "group_cover", "music_track")
+QUEUE_EMIT_INTERVAL_MS = 150
 
 
 class AppBridge(QObject):
@@ -57,6 +63,20 @@ class AppBridge(QObject):
         self.lyrics_worker = None
         self.collection_worker = None
         self.library = []
+        self._library_loaded = False
+        self._library_scanning = False
+        self._library_rescan = False
+        self._library_waiters: list = []
+        self._library_worker = None
+        self._status_cache: str | None = None
+        self._status_worker = None
+        self._connection_worker = None
+        # Progress ticks arrive many times per second; the QML side re-parses the
+        # whole queue on every queueChanged, so progress updates are coalesced.
+        self._queue_timer = QTimer(self)
+        self._queue_timer.setSingleShot(True)
+        self._queue_timer.setInterval(QUEUE_EMIT_INTERVAL_MS)
+        self._queue_timer.timeout.connect(self.queueChanged.emit)
         self.playlists = load_music_playlists()
         self.current_song = {}
         self.playback_queue: list[dict] = []
@@ -99,8 +119,12 @@ class AppBridge(QObject):
             "recent_searches": self.settings.get("recent_searches", []),
         }
 
-    def status_summary(self):
-        status = tool_status(self.settings.get("ffmpeg_path") or None, self.settings.get("ffprobe_path") or None)
+    def _persist(self):
+        """Save settings without clobbering playlists, which are also written by music.py."""
+        self.settings[PLAYLISTS_KEY] = self.playlists
+        save_settings(self.settings)
+
+    def _build_status_summary(self, status: dict) -> str:
         return json.dumps({
             "yt_dlp": status.get("yt_dlp") or "Missing",
             "ffmpeg": status.get("ffmpeg_version") or status.get("ffmpeg") or "Not detected",
@@ -108,6 +132,34 @@ class AppBridge(QObject):
             "encoders": len(status.get("encoders") or []),
             "music_download": "yt-dlp · no Spotify API credentials required",
         })
+
+    def status_summary(self):
+        """Return immediately. Tool probing (several subprocesses, up to ~17 s) used to
+        run right here on the GUI thread and froze the window at start-up."""
+        if self._status_cache is None:
+            self.refresh_status()
+            return self._build_status_summary({"yt_dlp": "Checking…", "ffmpeg_version": "Checking…",
+                                               "ffprobe": "Checking…", "encoders": []})
+        return self._status_cache
+
+    def refresh_status(self, force=False):
+        if self._status_worker is not None and self._status_worker.isRunning():
+            return
+        ffmpeg = self.settings.get("ffmpeg_path") or None
+        ffprobe = self.settings.get("ffprobe_path") or None
+        worker = FunctionWorker(lambda: tool_status(ffmpeg, ffprobe, refresh=force), self)
+        worker.done.connect(self._on_status_ready)
+        worker.failed.connect(self._notify)
+        self._status_worker = worker
+        worker.start()
+
+    def _on_status_ready(self, status):
+        self._status_cache = self._build_status_summary(status)
+        self.statusChanged.emit(self._status_cache)
+
+    def _emit_queue_soon(self):
+        if not self._queue_timer.isActive():
+            self._queue_timer.start()
 
     def _notify(self, message):
         self.errorRaised.emit(str(message))
@@ -345,7 +397,9 @@ class AppBridge(QObject):
             task.update(progress=max(0, min(100, int(percent))), detail=str(detail))
             if task["status"] in {"Queued", "Starting"}:
                 task["status"] = "Running"
-            self.queueChanged.emit()
+                self.queueChanged.emit()  # status transitions are shown immediately
+            else:
+                self._emit_queue_soon()
 
     def _on_log(self, task_id, message):
         task = self._find_task(task_id)
@@ -510,7 +564,7 @@ class AppBridge(QObject):
     def toggleShuffle(self):
         self.shuffle_enabled = not self.shuffle_enabled
         self.settings["player_shuffle"] = self.shuffle_enabled
-        save_settings(self.settings)
+        self._persist()
         if self.playback_queue:
             current = self.current_song.get("path")
             if self.shuffle_enabled:
@@ -526,7 +580,7 @@ class AppBridge(QObject):
     def cycleRepeat(self):
         self.repeat_mode = (self.repeat_mode + 1) % 3
         self.settings["player_repeat"] = self.repeat_mode
-        save_settings(self.settings)
+        self._persist()
         self._emit_player_song()
 
     @Slot()
@@ -542,8 +596,9 @@ class AppBridge(QObject):
 
     @Slot()
     def playAllLibrary(self):
-        if not self.library:
-            self.refreshLibrary()
+        if not self.library and not self._library_loaded:
+            self._scan_library(then=self.playAllLibrary)
+            return
         self.ordered_queue = list(self.library)
         self.playback_queue = list(self.library)
         if self.shuffle_enabled:
@@ -560,7 +615,7 @@ class AppBridge(QObject):
         random.shuffle(self.playback_queue)
         self.shuffle_enabled = True
         self.settings["player_shuffle"] = True
-        save_settings(self.settings)
+        self._persist()
         self.playback_index = 0 if self.playback_queue else -1
         if self.playback_queue:
             self._play_library_row(self.playback_queue[0])
@@ -603,7 +658,7 @@ class AppBridge(QObject):
     def toggleMute(self):
         self.audio_output.setMuted(not self.audio_output.isMuted())
         self.settings["player_muted"] = self.audio_output.isMuted()
-        save_settings(self.settings)
+        self._persist()
         self.playerChanged.emit(json.dumps({"muted": self.audio_output.isMuted(), "volume": self.audio_output.volume()}))
 
     @Slot(float)
@@ -611,7 +666,7 @@ class AppBridge(QObject):
         value = max(0.0, min(1.0, float(volume)))
         self.audio_output.setVolume(value)
         self.settings["player_volume"] = value
-        save_settings(self.settings)
+        self._persist()
         self.playerChanged.emit(json.dumps({"volume": self.audio_output.volume(), "muted": self.audio_output.isMuted()}))
 
     @Slot(str, str)
@@ -666,7 +721,10 @@ class AppBridge(QObject):
             self._notify(f"Setting cannot be changed here: {key}")
             return
         self.settings[key] = str(value)
-        save_settings(self.settings)
+        self._persist()
+        if key in {"ffmpeg_path", "ffprobe_path"}:
+            self._status_cache = None
+            self.refresh_status()
         self.settingsChanged.emit(json.dumps(self.public_settings()))
 
     @Slot(str)
@@ -676,7 +734,7 @@ class AppBridge(QObject):
         except (json.JSONDecodeError, TypeError):
             return
         self.settings["recent_searches"] = values
-        save_settings(self.settings)
+        self._persist()
         self.settingsChanged.emit(json.dumps(self.public_settings()))
 
     @Slot(str)
@@ -689,16 +747,59 @@ class AppBridge(QObject):
         for key in ("output_dir", "theme", "max_retries", "fragment_concurrency", "write_automatic_subtitles", "subtitle_languages", "ffmpeg_path", "ffprobe_path", "connection_mode", "proxy_url", "cookies_browser", "cookies_profile", "recent_searches"):
             if key in values:
                 self.settings[key] = values[key]
-        save_settings(self.settings)
+        self._persist()
         self.settingsChanged.emit(json.dumps(self.public_settings()))
-        self.statusChanged.emit(self.status_summary())
+        self._status_cache = None
+        self.refresh_status()
 
     @Slot()
     def refreshLibrary(self):
-        self.library = scan_audio_library(self.settings.get("output_dir", ""))
+        self._scan_library()
+
+    def _scan_library(self, then=None):
+        """Scan on a worker thread (tag parsing used to block the GUI thread)."""
+        if then is not None:
+            self._library_waiters.append(then)
+        if self._library_scanning:
+            self._library_rescan = True  # something changed mid-scan; scan again afterwards
+            return
+        self._library_scanning = True
+        root = self.settings.get("output_dir", "")
+        worker = FunctionWorker(lambda: scan_audio_library(root), self)
+        worker.done.connect(self._on_library_scanned)
+        worker.failed.connect(self._on_library_failed)
+        self._library_worker = worker
+        worker.start()
+
+    def _on_library_failed(self, message):
+        self._library_scanning = False
+        self._library_loaded = True
+        self._notify(f"Library scan failed: {message}")
+        self._run_library_waiters()
+
+    def _on_library_scanned(self, rows):
+        self._library_scanning = False
+        self._library_loaded = True
+        self.library = rows
         if self.playback_queue:
-            self.playback_queue = [row for row in self.library if any(old.get("path") == row.get("path") for old in self.playback_queue)]
+            # Keep playback order (shuffle) and remote previews; just refresh local rows.
+            fresh = {row["path"]: row for row in rows}
+            current = self.current_song.get("path")
+            self.playback_queue = [fresh.get(item.get("path"), item) for item in self.playback_queue
+                                   if item.get("path") in fresh or str(item.get("path", "")).startswith(("http://", "https://"))]
+            self.playback_index = next((i for i, item in enumerate(self.playback_queue) if item.get("path") == current),
+                                       min(self.playback_index, len(self.playback_queue) - 1))
         self.libraryChanged.emit(json.dumps(self.library))
+        if self._library_rescan:
+            self._library_rescan = False
+            self._scan_library()
+            return
+        self._run_library_waiters()
+
+    def _run_library_waiters(self):
+        waiters, self._library_waiters = self._library_waiters, []
+        for callback in waiters:
+            callback()
 
     @Slot()
     def refreshPlaylists(self):
@@ -721,8 +822,9 @@ class AppBridge(QObject):
 
     @Slot(str)
     def addToPlaylist(self, name):
-        if not self.library:
-            self.refreshLibrary()
+        if not self.library and not self._library_loaded:
+            self._scan_library(then=lambda: self.addToPlaylist(name))
+            return
         if not name:
             return
         self.playlists.setdefault(name, [])
@@ -815,20 +917,29 @@ class AppBridge(QObject):
 
     @Slot()
     def testConnection(self):
-        try:
-            mode = str(self.settings.get("connection_mode") or "Automatic").lower()
-            proxy = str(self.settings.get("proxy_url") or "").strip()
+        # Blocking network I/O (up to 8 s) must not run on the GUI thread.
+        if self._connection_worker is not None and self._connection_worker.isRunning():
+            return
+        mode = str(self.settings.get("connection_mode") or "Automatic").lower()
+        proxy = str(self.settings.get("proxy_url") or "").strip()
+
+        def probe():
             if mode == "direct":
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             elif mode == "proxy":
-                if not proxy: raise ValueError("Enter a proxy URL first.")
+                if not proxy:
+                    raise ValueError("Enter a proxy URL first.")
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
             else:
                 opener = urllib.request.build_opener()
             with opener.open("https://www.youtube.com/generate_204", timeout=8) as response:
-                self._notify("Connection test passed (HTTP %s)." % response.status)
-        except Exception as exc:
-            self._notify("Connection test failed: %s" % exc)
+                return "Connection test passed (HTTP %s)." % response.status
+
+        worker = FunctionWorker(probe, self)
+        worker.done.connect(self._notify)
+        worker.failed.connect(lambda message: self._notify("Connection test failed: %s" % message))
+        self._connection_worker = worker
+        worker.start()
 
     @Slot()
     def findProxyHelp(self):
@@ -840,7 +951,7 @@ class AppBridge(QObject):
 
     @Slot()
     def diagnostics(self):
-        self.statusChanged.emit(self.status_summary())
+        self.refresh_status(force=True)  # result arrives through statusChanged
 
     @Slot()
     def quit(self):
@@ -852,7 +963,7 @@ class AppBridge(QObject):
 
     @Slot(result=str)
     def queueJson(self):
-        return json.dumps(self.tasks)
+        return json.dumps([{key: task[key] for key in _QUEUE_FIELDS if key in task} for task in self.tasks])
 
     @Slot(result=str)
     def presetsJson(self):

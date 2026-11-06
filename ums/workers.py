@@ -8,6 +8,24 @@ from .engine import CancelledError, MediaError, analyze_url, convert_file, downl
 from .music import run_music_download
 
 
+class FunctionWorker(QThread):
+    """Run any blocking callable off the GUI thread and report its result by signal."""
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+
+    def run(self):
+        try:
+            result = self._fn()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        else:
+            self.done.emit(result)
+
+
 class AnalyzeWorker(QThread):
     completed = Signal(object)
     failed = Signal(str)

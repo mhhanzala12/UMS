@@ -6,29 +6,131 @@ native PySide6 application and keeps media processing on the user's machine.
 from __future__ import annotations
 
 import json
+import os
 import re
 import hashlib
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from pathlib import Path
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.parse import urlencode, urlparse
+from urllib.request import Request, url2pathname, urlopen
 
 from PySide6.QtCore import QThread, Signal
 
-from .config import load_settings, save_settings
+from .config import APP_DIR, atomic_write_text, load_settings, update_settings
+from .engine import CancelledError, network_options
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".aiff", ".wma"}
 MUSIC_LIBRARY_DIR = Path.home() / "Music" / "UniversalMediaStudio"
 PLAYLISTS_KEY = "music_playlists"
 
 
+_JSON_CACHE: dict[str, tuple[float, dict]] = {}
+_JSON_CACHE_LOCK = threading.Lock()
+_JSON_CACHE_TTL = 120.0
+_JSON_CACHE_MAX = 96
+
+
 def _get_json(url: str) -> dict:
+    """GET + decode JSON with a short TTL cache.
+
+    Re-opening an album, going back to a search, or re-running the same query
+    no longer repeats identical Deezer/iTunes round-trips.
+    """
+    now = time.monotonic()
+    with _JSON_CACHE_LOCK:
+        hit = _JSON_CACHE.get(url)
+        if hit and now - hit[0] < _JSON_CACHE_TTL:
+            return hit[1]
     request = Request(url, headers={"User-Agent": "UniversalMediaStudio/1.0 (local desktop app)"})
     with urlopen(request, timeout=12) as response:
-        return json.loads(response.read().decode("utf-8"))
+        data = json.loads(response.read().decode("utf-8"))
+    with _JSON_CACHE_LOCK:
+        if len(_JSON_CACHE) >= _JSON_CACHE_MAX:
+            for stale in sorted(_JSON_CACHE, key=lambda key: _JSON_CACHE[key][0])[: _JSON_CACHE_MAX // 4]:
+                _JSON_CACHE.pop(stale, None)
+        _JSON_CACHE[url] = (now, data)
+    return data
+
+
+def _search_deezer(query: str, kind: str, limit: int) -> list[dict]:
+    endpoint = {"Artists": "artist", "Albums": "album", "Playlists": "playlist"}.get(kind, "track")
+    data = _get_json("https://api.deezer.com/search/" + endpoint + "?" + urlencode({"q": query, "limit": limit}))
+    results: list[dict] = []
+    for row in data.get("data", []):
+        if endpoint == "artist":
+            title = row.get("name") or "Unknown artist"
+            results.append({"kind": "Artists", "provider": "Deezer", "title": title, "artist": title,
+                "album": f'{row.get("nb_album", 0)} albums', "duration": None,
+                "cover": row.get("picture_medium") or row.get("picture") or "", "url": row.get("link") or "",
+                "preview": "", "query": title})
+        elif endpoint == "album":
+            artist = (row.get("artist") or {}).get("name") or "Unknown artist"
+            title = row.get("title") or "Unknown album"
+            results.append({"kind": "Albums", "provider": "Deezer", "title": title, "artist": artist,
+                "album": f'{row.get("nb_tracks", 0)} tracks', "duration": None,
+                "cover": row.get("cover_medium") or row.get("cover") or "", "url": row.get("link") or "",
+                "preview": "", "query": f"{artist} - {title}"})
+        elif endpoint == "playlist":
+            owner = (row.get("user") or {}).get("name") or "Unknown creator"
+            title = row.get("title") or "Untitled playlist"
+            results.append({"kind": "Playlists", "provider": "Deezer", "title": title, "artist": owner,
+                "album": f'{row.get("nb_tracks", 0)} tracks', "duration": None,
+                "cover": row.get("picture_medium") or row.get("picture") or "", "url": row.get("link") or "",
+                "preview": "", "query": title})
+        else:
+            artist = row.get("artist") or {}
+            album = row.get("album") or {}
+            results.append({"kind": "Tracks", "provider": "Deezer", "title": row.get("title") or "Unknown title",
+                "artist": artist.get("name") or "Unknown artist", "album": album.get("title") or "",
+                "duration": row.get("duration"), "cover": album.get("cover_medium") or album.get("cover") or "",
+                "url": row.get("link") or "", "preview": row.get("preview") or "",
+                "query": f"{artist.get('name', '')} - {row.get('title', '')}".strip(" -")})
+    return results
+
+
+def _search_apple(query: str, limit: int) -> list[dict]:
+    data = _get_json("https://itunes.apple.com/search?" + urlencode({"term": query, "entity": "song", "limit": limit}))
+    return [{"kind": "Tracks", "provider": "Apple Music", "title": row.get("trackName") or "Unknown title",
+             "artist": row.get("artistName") or "Unknown artist", "album": row.get("collectionName") or "",
+             "duration": int(row["trackTimeMillis"] / 1000) if row.get("trackTimeMillis") else None,
+             "cover": row.get("artworkUrl100") or "", "url": row.get("trackViewUrl") or "",
+             "preview": row.get("previewUrl") or "",
+             "query": f"{row.get('artistName', '')} - {row.get('trackName', '')}".strip(" -")}
+            for row in data.get("results", [])]
+
+
+def _search_ytdlp(source: str, prefix: str, query: str, limit: int) -> list[dict]:
+    try:
+        import yt_dlp
+    except ImportError as exc:
+        raise RuntimeError("yt-dlp is required for YouTube and SoundCloud search.") from exc
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": "in_playlist",
+            "ignoreerrors": True, "socket_timeout": 12}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(f"{prefix}{min(limit, 20)}:{query}", download=False)
+    results = []
+    for row in (info or {}).get("entries") or []:
+        if not row:
+            continue
+        uploader = row.get("uploader") or row.get("channel") or "Unknown artist"
+        title = row.get("title") or "Unknown title"
+        results.append({"kind": "Tracks", "provider": source, "title": title, "artist": uploader, "album": "",
+            "duration": row.get("duration"), "cover": row.get("thumbnail") or "",
+            "url": row.get("webpage_url") or row.get("url") or "", "preview": "",
+            "query": f"{uploader} - {title}".strip(" -")})
+    return results
 
 
 def search_catalog(query: str, provider: str = "All", limit: int = 20, kind: str = "All", sort: bool = True) -> list[dict]:
-    """Search public music catalogs. Artist/album/playlist discovery is provided by Deezer."""
+    """Search public music catalogs. Artist/album/playlist discovery is provided by Deezer.
+
+    Providers are queried concurrently (they used to run one after another, so
+    a "All catalogs" search cost the *sum* of four network round-trips instead
+    of the slowest one). Result order stays deterministic: provider order.
+    """
     query = query.strip()
     if not query:
         return []
@@ -37,78 +139,25 @@ def search_catalog(query: str, provider: str = "All", limit: int = 20, kind: str
     if kind in {"Artists", "Albums", "Playlists"}:
         # These catalog object types are supported by Deezer's public search endpoints.
         providers = ["Deezer"]
-    results: list[dict] = []
-    errors = []
+    jobs = []
     if "Deezer" in providers:
-        endpoint = {"Artists": "artist", "Albums": "album", "Playlists": "playlist"}.get(kind, "track")
-        try:
-            data = _get_json("https://api.deezer.com/search/" + endpoint + "?" + urlencode({"q": query, "limit": limit}))
-            for row in data.get("data", []):
-                if endpoint == "artist":
-                    title = row.get("name") or "Unknown artist"
-                    results.append({"kind": "Artists", "provider": "Deezer", "title": title, "artist": title,
-                        "album": f'{row.get("nb_album", 0)} albums', "duration": None,
-                        "cover": row.get("picture_medium") or row.get("picture") or "", "url": row.get("link") or "",
-                        "preview": "", "query": title})
-                elif endpoint == "album":
-                    artist = (row.get("artist") or {}).get("name") or "Unknown artist"
-                    title = row.get("title") or "Unknown album"
-                    results.append({"kind": "Albums", "provider": "Deezer", "title": title, "artist": artist,
-                        "album": f'{row.get("nb_tracks", 0)} tracks', "duration": None,
-                        "cover": row.get("cover_medium") or row.get("cover") or "", "url": row.get("link") or "",
-                        "preview": "", "query": f"{artist} - {title}"})
-                elif endpoint == "playlist":
-                    owner = (row.get("user") or {}).get("name") or "Unknown creator"
-                    title = row.get("title") or "Untitled playlist"
-                    results.append({"kind": "Playlists", "provider": "Deezer", "title": title, "artist": owner,
-                        "album": f'{row.get("nb_tracks", 0)} tracks', "duration": None,
-                        "cover": row.get("picture_medium") or row.get("picture") or "", "url": row.get("link") or "",
-                        "preview": "", "query": title})
-                else:
-                    artist = row.get("artist") or {}
-                    album = row.get("album") or {}
-                    results.append({"kind": "Tracks", "provider": "Deezer", "title": row.get("title") or "Unknown title",
-                        "artist": artist.get("name") or "Unknown artist", "album": album.get("title") or "",
-                        "duration": row.get("duration"), "cover": album.get("cover_medium") or album.get("cover") or "",
-                        "url": row.get("link") or "", "preview": row.get("preview") or "",
-                        "query": f"{artist.get('name', '')} - {row.get('title', '')}".strip(" -")})
-        except Exception as exc:
-            errors.append(f"Deezer: {exc}")
-    if kind in {"All", "Tracks"} and "Apple Music" in providers:
-        try:
-            data = _get_json("https://itunes.apple.com/search?" + urlencode({"term": query, "entity": "song", "limit": limit}))
-            for row in data.get("results", []):
-                results.append({"kind": "Tracks", "provider": "Apple Music", "title": row.get("trackName") or "Unknown title",
-                    "artist": row.get("artistName") or "Unknown artist", "album": row.get("collectionName") or "",
-                    "duration": int(row["trackTimeMillis"] / 1000) if row.get("trackTimeMillis") else None,
-                    "cover": row.get("artworkUrl100") or "", "url": row.get("trackViewUrl") or "",
-                    "preview": row.get("previewUrl") or "",
-                    "query": f"{row.get('artistName', '')} - {row.get('trackName', '')}".strip(" -")})
-        except Exception as exc:
-            errors.append(f"Apple Music: {exc}")
-    if kind in {"All", "Tracks"} and ("YouTube" in providers or "SoundCloud" in providers):
-        try:
-            import yt_dlp
-            for source, prefix in (("YouTube", "ytsearch"), ("SoundCloud", "scsearch")):
-                if source not in providers:
-                    continue
-                opts = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": "in_playlist", "ignoreerrors": True, "socket_timeout": 12}
+        jobs.append(("Deezer", lambda: _search_deezer(query, kind, limit)))
+    if kind in {"All", "Tracks"}:
+        if "Apple Music" in providers:
+            jobs.append(("Apple Music", lambda: _search_apple(query, limit)))
+        for source, prefix in (("YouTube", "ytsearch"), ("SoundCloud", "scsearch")):
+            if source in providers:
+                jobs.append((source, lambda source=source, prefix=prefix: _search_ytdlp(source, prefix, query, limit)))
+    results: list[dict] = []
+    errors: list[str] = []
+    if jobs:
+        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+            futures = [(label, pool.submit(fn)) for label, fn in jobs]
+            for label, future in futures:
                 try:
-                    with yt_dlp.YoutubeDL(opts) as ydl:
-                        info = ydl.extract_info(f"{prefix}{min(limit, 20)}:{query}", download=False)
-                    for row in (info or {}).get("entries") or []:
-                        if not row:
-                            continue
-                        uploader = row.get("uploader") or row.get("channel") or "Unknown artist"
-                        title = row.get("title") or "Unknown title"
-                        results.append({"kind": "Tracks", "provider": source, "title": title, "artist": uploader, "album": "",
-                            "duration": row.get("duration"), "cover": row.get("thumbnail") or "",
-                            "url": row.get("webpage_url") or row.get("url") or "", "preview": "",
-                            "query": f"{uploader} - {title}".strip(" -")})
+                    results.extend(future.result())
                 except Exception as exc:
-                    errors.append(f"{source}: {exc}")
-        except ImportError:
-            errors.append("yt-dlp is required for YouTube and SoundCloud search.")
+                    errors.append(f"{label}: {exc}")
     if not results and errors:
         raise RuntimeError("Music search providers were unavailable. " + " | ".join(errors[:3]))
     if sort:
@@ -160,14 +209,22 @@ class CatalogSearchWorker(QThread):
             stages = [("Tracks", 60)]
             if self.provider in {"All", "All catalogs", "Deezer"}:
                 stages += [("Artists", 30), ("Albums", 30), ("Playlists", 30)]
-            rows: list[dict] = []
+            by_stage: dict[int, list[dict]] = {}
             errors: list[str] = []
-            for kind, limit in stages:
-                try:
-                    rows += search_catalog(self.query, self.provider, limit=limit, kind=kind, sort=False)
-                    self.progress.emit(list(rows))
-                except Exception as exc:
-                    errors.append(str(exc))
+            # Stages are independent HTTP calls: fetch them in parallel, but show
+            # rows in stage order (Tracks, Artists, Albums, Playlists) as they arrive.
+            with ThreadPoolExecutor(max_workers=len(stages)) as pool:
+                futures = {
+                    pool.submit(search_catalog, self.query, self.provider, limit=limit, kind=kind, sort=False): index
+                    for index, (kind, limit) in enumerate(stages)
+                }
+                for future in as_completed(futures):
+                    try:
+                        by_stage[futures[future]] = future.result()
+                        self.progress.emit([row for key in sorted(by_stage) for row in by_stage[key]])
+                    except Exception as exc:
+                        errors.append(str(exc))
+            rows = [row for key in sorted(by_stage) for row in by_stage[key]]
             if not rows and errors:
                 raise RuntimeError(errors[0])
             self.completed.emit(rows)
@@ -391,6 +448,7 @@ class SpotifyResolveWorker(QThread):
             self.failed.emit(str(exc))
 
 
+@lru_cache(maxsize=4096)
 def _match_text(value: str) -> str:
     import unicodedata
     value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii")
@@ -427,11 +485,11 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
 
     output = Path(output_dir).expanduser()
     output.mkdir(parents=True, exist_ok=True)
-    before = {str(p): p.stat().st_mtime_ns for p in output.rglob("*")
-              if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS}
+    started_ns = time.time_ns()
+    last_report = {"pct": -1, "t": 0.0}
+
     def report(data):
         if cancel_event and cancel_event.is_set():
-            from .engine import CancelledError
             raise CancelledError("Music download cancelled.")
         status = data.get("status")
         if status == "downloading" and progress_cb:
@@ -445,7 +503,11 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
                 detail += f" · {speed / 1024 / 1024:.1f} MB/s"
             if eta is not None:
                 detail += f" · {eta}s left"
-            progress_cb(max(0, min(95, percent)), detail)
+            percent = max(0, min(95, percent))
+            now = time.monotonic()
+            if percent != last_report["pct"] or now - last_report["t"] >= 1.0:  # throttle hook spam
+                last_report.update(pct=percent, t=now)
+                progress_cb(percent, detail)
         elif status == "finished" and progress_cb:
             progress_cb(96, "Download complete · tagging audio…")
 
@@ -471,45 +533,42 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
     }
     if ffmpeg_path:
         options["ffmpeg_location"] = str(ffmpeg_path)
-    settings = settings or {}
-    connection_mode = str(settings.get("connection_mode") or "Automatic").lower()
-    if connection_mode == "direct":
-        options["proxy"] = ""
-    elif connection_mode == "proxy":
-        proxy = str(settings.get("proxy_url") or "").strip()
-        if not proxy:
-            raise RuntimeError("Proxy mode is selected, but no proxy URL is configured.")
-        options["proxy"] = proxy
-    browser = str(settings.get("cookies_browser") or "None").strip().lower()
-    profile = str(settings.get("cookies_profile") or "").strip()
-    if browser in {"brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale"}:
-        options["cookiesfrombrowser"] = (browser, profile or None)
+    net_options = network_options(settings)
+    options.update(net_options)
     if log_cb:
         log_cb("Searching YouTube for the closest audio match using yt-dlp (no Spotify API credentials).")
         log_cb(f"Search: {query}")
     if progress_cb:
         progress_cb(1, "Finding a matching audio source…")
+    downloaded: list[str] = []
     try:
+        # Ranking only needs title/uploader/duration, so search with flat extraction:
+        # one request instead of fully resolving all five candidate videos.
+        search_opts = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": "in_playlist",
+                       "ignoreerrors": False, "socket_timeout": 25, **net_options}
+        with yt_dlp.YoutubeDL(search_opts) as search_ydl:
+            search = search_ydl.extract_info(f"ytsearch5:{query}", download=False)
+        entries = [entry for entry in (search or {}).get("entries") or [] if entry]
+        if not entries:
+            raise RuntimeError("YouTube search returned no matching tracks.")
+        score, selected = max(((_music_match_score(entry, metadata, query), entry) for entry in entries),
+                              key=lambda pair: pair[0])
+        selected_url = selected.get("webpage_url") or selected.get("original_url") or selected.get("url")
+        if selected_url and not str(selected_url).startswith(("http://", "https://")):
+            selected_url = "https://www.youtube.com/watch?v=" + str(selected_url)
+        if not selected_url:
+            raise RuntimeError("The best matching search result did not include a playable media URL.")
+        if log_cb:
+            log_cb(f"Best match: {selected.get('title', 'Unknown title')} — {selected.get('uploader') or selected.get('channel') or selected.get('artist') or 'Unknown artist'} (match {score:.0%})")
+            if score < 0.38:
+                log_cb("Warning: this is a weak metadata match. Check the downloaded track before keeping it.")
         with yt_dlp.YoutubeDL(options) as ydl:
-            search = ydl.extract_info(f"ytsearch5:{query}", download=False)
-            entries = [entry for entry in (search or {}).get("entries") or [] if entry]
-            if not entries:
-                raise RuntimeError("YouTube search returned no matching tracks.")
-            ranked = sorted(entries, key=lambda entry: _music_match_score(entry, metadata, query), reverse=True)
-            selected = ranked[0]
-            selected_url = selected.get("webpage_url") or selected.get("original_url") or selected.get("url")
-            if selected_url and not str(selected_url).startswith(("http://", "https://")):
-                selected_url = "https://www.youtube.com/watch?v=" + str(selected_url)
-            if not selected_url:
-                raise RuntimeError("The best matching search result did not include a playable media URL.")
-            score = _music_match_score(selected, metadata, query)
-            if log_cb:
-                log_cb(f"Best match: {selected.get('title', 'Unknown title')} — {selected.get('uploader') or selected.get('artist') or 'Unknown artist'} (match {score:.0%})")
-                if score < 0.38:
-                    log_cb("Warning: this is a weak metadata match. Check the downloaded track before keeping it.")
-            ydl.download([selected_url])
+            info = ydl.extract_info(selected_url, download=True)
+        for item in (info or {}).get("requested_downloads") or []:
+            filepath = item.get("filepath") or item.get("_filename")
+            if filepath and Path(filepath).suffix.lower() in AUDIO_EXTENSIONS and Path(filepath).is_file():
+                downloaded.append(str(filepath))
     except Exception as exc:
-        from .engine import CancelledError
         if cancel_event and cancel_event.is_set():
             raise CancelledError("Music download cancelled.") from exc
         message = str(exc)
@@ -517,36 +576,45 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
             raise RuntimeError("Audio was found, but FFmpeg could not convert/tag it. Install FFmpeg and make sure ffmpeg and ffprobe are on PATH.") from exc
         raise RuntimeError(f"Could not download a matching audio source: {message}") from exc
     if cancel_event and cancel_event.is_set():
-        from .engine import CancelledError
         raise CancelledError("Music download cancelled.")
-    files = sorted(str(p) for p in output.rglob("*") if p.is_file()
-                   and p.suffix.lower() in AUDIO_EXTENSIONS
-                   and (str(p) not in before or p.stat().st_mtime_ns != before[str(p)]))
+    # yt-dlp reports the exact final paths. Only if it did not, fall back to
+    # files modified since the job started (replaces two full library scans
+    # that ran before *and* after every single track download).
+    files = sorted(set(downloaded))
+    if not files:
+        files = sorted(str(p) for p in output.rglob("*")
+                       if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS and p.stat().st_mtime_ns >= started_ns - 2_000_000_000)
     if not files:
         raise RuntimeError("yt-dlp completed without producing an audio file. Check FFmpeg and the selected source.")
     if metadata:
         try:
-            from mutagen.id3 import ID3, APIC, TALB, TIT2, TPE1, TPE2
+            from mutagen.id3 import ID3, APIC, TALB, TIT2, TPE1
+            title = str(metadata.get("title") or "")
+            artist = str(metadata.get("artist") or "")
+            album = str(metadata.get("album") or "")
+            image_data = b""
+            mime = "image/jpeg"
+            if metadata.get("cover"):
+                # Download the artwork once, not once per output file.
+                try:
+                    request = Request(str(metadata["cover"]), headers={"User-Agent": SPOTIFY_USER_AGENT})
+                    with urlopen(request, timeout=12) as response:
+                        image_data = response.read()
+                    # Was b"\\x89PNG" (escaped backslash), which never matched a real PNG header.
+                    mime = "image/png" if image_data.startswith(b"\x89PNG") else "image/jpeg"
+                except Exception as art_error:
+                    image_data = b""
+                    if log_cb: log_cb(f"Cover artwork could not be embedded: {art_error}")
             for file_path in files:
                 try:
-                    tags = ID3(file_path) if Path(file_path).exists() else ID3()
+                    tags = ID3(file_path)
                 except Exception:
                     tags = ID3()
-                title = str(metadata.get("title") or "")
-                artist = str(metadata.get("artist") or "")
-                album = str(metadata.get("album") or "")
                 if title: tags.add(TIT2(encoding=3, text=title))
                 if artist: tags.add(TPE1(encoding=3, text=artist))
                 if album: tags.add(TALB(encoding=3, text=album))
-                if metadata.get("cover"):
-                    try:
-                        request = Request(str(metadata["cover"]), headers={"User-Agent": SPOTIFY_USER_AGENT})
-                        with urlopen(request, timeout=12) as response:
-                            image_data = response.read()
-                        mime = "image/png" if image_data.startswith(b"\\x89PNG") else "image/jpeg"
-                        tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=image_data))
-                    except Exception as art_error:
-                        if log_cb: log_cb(f"Cover artwork could not be embedded: {art_error}")
+                if image_data:
+                    tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=image_data))
                 tags.save(file_path)
         except Exception as tag_error:
             if log_cb: log_cb(f"Spotify tags could not be applied; keeping yt-dlp metadata: {tag_error}")
@@ -589,9 +657,10 @@ def _audio_metadata(path: Path) -> dict:
             first = pictures[0]
             image_bytes = getattr(first, "data", first)
             if image_bytes:
-                artwork_dir = Path.home() / ".universal_media_studio" / "artwork"
+                artwork_dir = APP_DIR / "artwork"
                 artwork_dir.mkdir(parents=True, exist_ok=True)
-                digest = hashlib.sha1(str(path).encode("utf-8", errors="replace") + bytes(image_bytes)).hexdigest()
+                # Content-addressed: tracks of one album share a single cover file.
+                digest = hashlib.sha1(bytes(image_bytes)).hexdigest()
                 image_path = artwork_dir / f"{digest}.jpg"
                 if not image_path.exists():
                     image_path.write_bytes(bytes(image_bytes))
@@ -601,20 +670,70 @@ def _audio_metadata(path: Path) -> dict:
     return data
 
 
+LIBRARY_CACHE_FILE = APP_DIR / "library_cache.json"
+_LIBRARY_CACHE_VERSION = 2
+
+
+def _load_library_cache() -> dict:
+    try:
+        data = json.loads(LIBRARY_CACHE_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("version") == _LIBRARY_CACHE_VERSION:
+            return data.get("files") or {}
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def _cover_missing(cover: str) -> bool:
+    if not cover:
+        return False
+    try:
+        return not os.path.exists(url2pathname(urlparse(cover).path))
+    except Exception:
+        return True
+
+
 def scan_audio_library(folder: str | Path) -> list[dict]:
+    """List audio files with tags.
+
+    Tag/artwork parsing (two mutagen opens + image hashing per file) dominated
+    refresh time, and ran on every refresh for every file. Parsed rows are now
+    cached on disk keyed by (path, mtime, size), so only new/changed files are
+    parsed and an unchanged library scans at os.stat speed.
+    """
     root = Path(folder).expanduser()
     if not root.exists():
         return []
+    root_prefix = str(root) + os.sep
+    old_cache = _load_library_cache()
+    new_cache = {key: value for key, value in old_cache.items() if not key.startswith(root_prefix)}
+    dirty = False
     files = []
-    for path in root.rglob("*"):
+    for dirpath, _dirs, names in os.walk(root):
+        for name in names:
+            if os.path.splitext(name)[1].lower() not in AUDIO_EXTENSIONS:
+                continue
+            full = os.path.join(dirpath, name)
+            try:
+                stat = os.stat(full)
+            except OSError:
+                continue
+            cached = old_cache.get(full)
+            if (cached and cached.get("mtime_ns") == stat.st_mtime_ns and cached.get("size") == stat.st_size
+                    and not _cover_missing(cached["row"].get("cover", ""))):
+                row = dict(cached["row"])
+            else:
+                row = _audio_metadata(Path(full))
+                dirty = True
+            new_cache[full] = {"mtime_ns": stat.st_mtime_ns, "size": stat.st_size, "row": dict(row)}
+            row["path"] = full
+            row["modified"] = stat.st_mtime
+            files.append(row)
+    if dirty or len(new_cache) != len(old_cache):
         try:
-            if path.is_file() and path.suffix.lower() in AUDIO_EXTENSIONS:
-                row = _audio_metadata(path)
-                row["path"] = str(path)
-                row["modified"] = path.stat().st_mtime
-                files.append(row)
+            atomic_write_text(LIBRARY_CACHE_FILE, json.dumps({"version": _LIBRARY_CACHE_VERSION, "files": new_cache}, ensure_ascii=False))
         except OSError:
-            continue
+            pass
     return sorted(files, key=lambda item: (item["modified"], item["title"].casefold()), reverse=True)
 
 
@@ -630,6 +749,4 @@ def load_music_playlists() -> dict[str, list[str]]:
 
 
 def save_music_playlists(playlists: dict[str, list[str]]) -> None:
-    settings = load_settings()
-    settings[PLAYLISTS_KEY] = playlists
-    save_settings(settings)
+    update_settings(**{PLAYLISTS_KEY: playlists})

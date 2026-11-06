@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
 from pathlib import Path
 
 APP_DIR = Path.home() / ".universal_media_studio"
@@ -24,19 +27,50 @@ DEFAULT_SETTINGS = {
     "player_muted": False,
 }
 
+# Settings are read/written from the GUI thread *and* worker threads
+# (playlists), so file access is serialised.
+_IO_LOCK = threading.RLock()
+
 
 def load_settings() -> dict:
-    APP_DIR.mkdir(parents=True, exist_ok=True)
-    if CONFIG_FILE.exists():
+    with _IO_LOCK:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        if CONFIG_FILE.exists():
+            try:
+                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return {**DEFAULT_SETTINGS, **data}
+            except (OSError, json.JSONDecodeError):
+                pass
+        return dict(DEFAULT_SETTINGS)
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write via a temp file + rename so a crash can never leave a truncated file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
         try:
-            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return {**DEFAULT_SETTINGS, **data}
-        except (OSError, json.JSONDecodeError):
+            os.unlink(tmp_name)
+        except OSError:
             pass
-    return dict(DEFAULT_SETTINGS)
+        raise
 
 
 def save_settings(settings: dict) -> None:
-    APP_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(settings, indent=2, ensure_ascii=False), encoding="utf-8")
+    with _IO_LOCK:
+        atomic_write_text(CONFIG_FILE, json.dumps(settings, indent=2, ensure_ascii=False))
+
+
+def update_settings(**changes) -> dict:
+    """Read-modify-write only the given keys, so unrelated keys written by
+    other code paths (e.g. playlists) are never clobbered by a stale copy."""
+    with _IO_LOCK:
+        current = load_settings()
+        current.update(changes)
+        save_settings(current)
+        return current

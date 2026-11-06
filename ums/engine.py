@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import threading
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -30,6 +32,32 @@ class CancelledError(MediaError):
     pass
 
 
+SUBTITLE_EXTENSIONS = {".srt", ".vtt", ".ass", ".ssa", ".ttml"}
+THUMBNAIL_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+SUPPORTED_COOKIE_BROWSERS = {"brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale"}
+
+# Encoder tables used to be rebuilt on every _ffmpeg_args() call; they are constants.
+_H264_ENCODERS = ("libx264", "h264_nvenc", "h264_qsv", "h264_amf")
+_HEVC_ENCODERS = ("libx265", "hevc_nvenc", "hevc_qsv", "hevc_amf")
+ENCODER_PREFERENCES = {
+    "h264": _H264_ENCODERS, "h.264": _H264_ENCODERS,
+    "hevc": _HEVC_ENCODERS, "h265": _HEVC_ENCODERS,
+    "av1": ("libsvtav1", "libaom-av1", "av1_nvenc"),
+    "vp9": ("libvpx-vp9",), "vp8": ("libvpx",),
+    "mpeg4": ("mpeg4",), "mpeg2": ("mpeg2video",), "theora": ("libtheora",),
+}
+ENCODER_FAMILIES = {codec: frozenset(names) for codec, names in ENCODER_PREFERENCES.items()}
+DEFAULT_VIDEO_ENCODERS = {
+    "h264": "libx264", "h.264": "libx264", "hevc": "libx265", "h265": "libx265",
+    "av1": "libsvtav1", "vp9": "libvpx-vp9", "vp8": "libvpx",
+    "mpeg4": "mpeg4", "mpeg2": "mpeg2video", "theora": "libtheora",
+}
+_ENCODER_LINE = re.compile(r"^\s*[VASD.]{6}\s+(\S+)")
+
+# Hide the console window FFmpeg/ffprobe would otherwise flash in a windowed Windows build.
+_NO_WINDOW: dict = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
+
+
 def _which(name: str, configured: Optional[str] = None) -> Optional[str]:
     if configured:
         p = Path(configured).expanduser()
@@ -38,7 +66,85 @@ def _which(name: str, configured: Optional[str] = None) -> Optional[str]:
     return shutil.which(name)
 
 
-def tool_status(ffmpeg_path: Optional[str] = None, ffprobe_path: Optional[str] = None) -> dict:
+def network_options(settings: Optional[dict], default_browser: str = "None") -> dict:
+    """yt-dlp proxy + browser-cookie options derived from the user's settings.
+
+    This logic used to be copy-pasted in three places (analysis, download, music).
+    """
+    settings = settings or {}
+    opts: dict = {}
+    mode = str(settings.get("connection_mode") or "Automatic").lower()
+    if mode == "direct":
+        opts["proxy"] = ""
+    elif mode == "proxy":
+        proxy = str(settings.get("proxy_url") or "").strip()
+        if not proxy:
+            raise MediaError("Proxy mode is selected, but no proxy URL is configured.")
+        opts["proxy"] = proxy
+    browser = str(settings.get("cookies_browser") or default_browser).strip().lower()
+    if browser in SUPPORTED_COOKIE_BROWSERS:
+        profile = str(settings.get("cookies_profile") or "").strip()
+        opts["cookiesfrombrowser"] = (browser, profile or None)
+    return opts
+
+
+# `ffmpeg -version` / `ffmpeg -encoders` cost up to ~17 s of blocking subprocess time.
+# Results never change for a given binary, so they are probed once per (path, mtime).
+_FFMPEG_INFO_CACHE: dict[tuple[str, int], dict] = {}
+_FFMPEG_INFO_LOCK = threading.Lock()
+
+
+def _run_quiet(args: list[str], timeout: float) -> str:
+    p = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
+                       encoding="utf-8", errors="replace", **_NO_WINDOW)
+    return (p.stdout or "") + "\n" + (p.stderr or "")
+
+
+def ffmpeg_info(ffmpeg: str, refresh: bool = False) -> dict:
+    """Cached FFmpeg version string and encoder list (probed concurrently)."""
+    try:
+        key = (ffmpeg, os.stat(ffmpeg).st_mtime_ns)
+    except OSError:
+        key = (ffmpeg, 0)
+    if not refresh:
+        with _FFMPEG_INFO_LOCK:
+            cached = _FFMPEG_INFO_CACHE.get(key)
+        if cached is not None:
+            return cached
+
+    def probe_version():
+        try:
+            return _run_quiet([ffmpeg, "-version"], 5).strip().splitlines()[0][:120]
+        except Exception:
+            return "Found (version check failed)"
+
+    def probe_encoders():
+        try:
+            found = []
+            for line in _run_quiet([ffmpeg, "-hide_banner", "-encoders"], 12).splitlines():
+                match = _ENCODER_LINE.match(line)
+                if match and match.group(1) != "=":
+                    found.append(match.group(1))
+            return sorted(set(found))
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        version_future = pool.submit(probe_version)
+        encoders_future = pool.submit(probe_encoders)
+        info = {"version": version_future.result(), "encoders": encoders_future.result()}
+    if info["encoders"]:  # never cache a failed probe
+        with _FFMPEG_INFO_LOCK:
+            _FFMPEG_INFO_CACHE[key] = info
+    return info
+
+
+def list_encoders(ffmpeg: str) -> list[str]:
+    return list(ffmpeg_info(ffmpeg)["encoders"])
+
+
+def tool_status(ffmpeg_path: Optional[str] = None, ffprobe_path: Optional[str] = None,
+                refresh: bool = False) -> dict:
     try:
         import yt_dlp
         ytdlp_version = getattr(yt_dlp, "__version__", "installed")
@@ -46,29 +152,13 @@ def tool_status(ffmpeg_path: Optional[str] = None, ffprobe_path: Optional[str] =
         ytdlp_version = None
     ffmpeg = _which("ffmpeg", ffmpeg_path)
     ffprobe = _which("ffprobe", ffprobe_path)
-    ffmpeg_version = None
-    encoders = []
-    if ffmpeg:
-        try:
-            p = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True, timeout=5)
-            first = (p.stdout or p.stderr).splitlines()[0]
-            ffmpeg_version = first[:120]
-        except Exception:
-            ffmpeg_version = "Found (version check failed)"
-        try:
-            p = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=12)
-            for line in (p.stdout + "\n" + p.stderr).splitlines():
-                match = re.match(r"^\s*[VASD.]{6}\s+(\S+)", line)
-                if match and match.group(1) != "=":
-                    encoders.append(match.group(1))
-        except Exception:
-            encoders = []
+    info = ffmpeg_info(ffmpeg, refresh) if ffmpeg else {"version": None, "encoders": []}
     return {
         "yt_dlp": ytdlp_version,
         "ffmpeg": ffmpeg,
         "ffprobe": ffprobe,
-        "ffmpeg_version": ffmpeg_version,
-        "encoders": sorted(set(encoders)),
+        "ffmpeg_version": info["version"],
+        "encoders": list(info["encoders"]),
     }
 
 
@@ -92,19 +182,7 @@ def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settin
         "socket_timeout": 20,
         "extractor_retries": 2,
     }
-    settings = settings or {}
-    mode = str(settings.get("connection_mode") or "Automatic").lower()
-    if mode == "direct":
-        opts["proxy"] = ""
-    elif mode == "proxy":
-        proxy = str(settings.get("proxy_url") or "").strip()
-        if not proxy:
-            raise MediaError("Proxy mode is selected, but no proxy URL is configured.")
-        opts["proxy"] = proxy
-    browser = str(settings.get("cookies_browser") or "None").strip().lower()
-    profile = str(settings.get("cookies_profile") or "").strip()
-    if browser in {"brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale"}:
-        opts["cookiesfrombrowser"] = (browser, profile or None)
+    opts.update(network_options(settings))
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -190,39 +268,15 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
             "alac": "alac", "wma": "wma",
         }.get(container, "copy")
     available = set(options.get("_available_encoders") or [])
-    encoder_preferences = {
-        "h264": ["libx264", "h264_nvenc", "h264_qsv", "h264_amf"],
-        "h.264": ["libx264", "h264_nvenc", "h264_qsv", "h264_amf"],
-        "hevc": ["libx265", "hevc_nvenc", "hevc_qsv", "hevc_amf"],
-        "h265": ["libx265", "hevc_nvenc", "hevc_qsv", "hevc_amf"],
-        "av1": ["libsvtav1", "libaom-av1", "av1_nvenc"],
-        "vp9": ["libvpx-vp9"], "vp8": ["libvpx"],
-        "mpeg4": ["mpeg4"], "mpeg2": ["mpeg2video"], "theora": ["libtheora"],
-    }
     def preferred_encoder(codec, default):
-        candidates = encoder_preferences.get(codec, [default])
         if not available:
             return default
-        return next((item for item in candidates if item in available), default)
-    vmap = {
-        "h264": preferred_encoder("h264", "libx264"), "h.264": preferred_encoder("h.264", "libx264"),
-        "hevc": preferred_encoder("hevc", "libx265"), "h265": preferred_encoder("h265", "libx265"),
-        "av1": preferred_encoder("av1", "libsvtav1"),
-        "vp9": preferred_encoder("vp9", "libvpx-vp9"), "vp8": preferred_encoder("vp8", "libvpx"),
-        "mpeg4": "mpeg4", "mpeg2": "mpeg2video", "theora": "libtheora", "copy": "copy",
-    }
-    encoder_families = {
-        "h264": {"libx264", "h264_nvenc", "h264_qsv", "h264_amf"},
-        "h.264": {"libx264", "h264_nvenc", "h264_qsv", "h264_amf"},
-        "hevc": {"libx265", "hevc_nvenc", "hevc_qsv", "hevc_amf"},
-        "h265": {"libx265", "hevc_nvenc", "hevc_qsv", "hevc_amf"},
-        "av1": {"libsvtav1", "libaom-av1", "av1_nvenc"},
-        "vp9": {"libvpx-vp9"}, "vp8": {"libvpx"},
-        "mpeg4": {"mpeg4"}, "mpeg2": {"mpeg2video"}, "theora": {"libtheora"},
-    }
+        return next((item for item in ENCODER_PREFERENCES.get(codec, (default,)) if item in available), default)
+    vmap = {codec: preferred_encoder(codec, default) for codec, default in DEFAULT_VIDEO_ENCODERS.items()}
+    vmap["copy"] = "copy"
     encoder_override = str(options.get("video_encoder") or "Auto")
     if encoder_override != "Auto":
-        if vcodec_choice == "copy" or encoder_override not in encoder_families.get(vcodec_choice, set()):
+        if vcodec_choice == "copy" or encoder_override not in ENCODER_FAMILIES.get(vcodec_choice, frozenset()):
             raise MediaError(f"Encoder {encoder_override} is not compatible with video codec {vcodec_choice}.")
         if available and encoder_override not in available:
             raise MediaError(f"Encoder {encoder_override} is not present in the installed FFmpeg build.")
@@ -392,61 +446,78 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
     return cmd
 
 
+def _terminate(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
 def _run_ffmpeg(source: Path, target: Path, options: dict, ffmpeg: str,
                 cancel_event=None, progress_cb=None, duration=None, subtitle_files=None):
     options = dict(options)
     if not options.get("_available_encoders"):
-        try:
-            probe = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=12)
-            options["_available_encoders"] = [
-                match.group(1) for line in (probe.stdout + "\n" + probe.stderr).splitlines()
-                if (match := re.match(r"^\s*[VASD.]{6}\s+(\S+)", line)) and match.group(1) != "="
-            ]
-        except Exception:
-            options["_available_encoders"] = []
+        options["_available_encoders"] = list_encoders(ffmpeg)  # cached after first probe
     args = [ffmpeg] + _ffmpeg_args(source, target, options, subtitle_files)
     try:
         proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, encoding="utf-8", errors="replace", bufsize=1)
+                                text=True, encoding="utf-8", errors="replace", bufsize=1, **_NO_WINDOW)
     except OSError as exc:
         raise MediaError(f"Could not start FFmpeg: {exc}") from exc
+
+    # stderr is drained continuously: reading it only after stdout closed could
+    # deadlock FFmpeg once the OS pipe buffer filled up.
+    stderr_tail: deque[str] = deque(maxlen=40)
+
+    def drain_stderr():
+        try:
+            for line in proc.stderr:  # type: ignore[union-attr]
+                stderr_tail.append(line.rstrip())
+        except (OSError, ValueError):
+            pass
+
+    # Cancellation is polled independently of FFmpeg output, so Cancel responds
+    # within ~250 ms even when FFmpeg is silent (e.g. slow seeks, stalled input).
+    def watch_cancel():
+        while proc.poll() is None:
+            if cancel_event.wait(0.25):  # type: ignore[union-attr]
+                _terminate(proc)
+                return
+
+    helpers = [threading.Thread(target=drain_stderr, daemon=True)]
+    if cancel_event is not None:
+        helpers.append(threading.Thread(target=watch_cancel, daemon=True))
+    for helper in helpers:
+        helper.start()
+
     last_pct = -1
     try:
         assert proc.stdout is not None
         for raw in proc.stdout:
-            _check_cancel(cancel_event)
             line = raw.strip()
             if line.startswith("out_time_ms=") and duration:
                 try:
                     elapsed = int(line.split("=", 1)[1]) / 1_000_000
-                    pct = max(0, min(99, int(elapsed / max(duration, 0.001) * 100)))
-                    if progress_cb and pct != last_pct:
-                        progress_cb(pct, "Encoding…")
-                        last_pct = pct
                 except ValueError:
-                    pass
+                    continue
+                pct = max(0, min(99, int(elapsed / max(duration, 0.001) * 100)))
+                if progress_cb and pct != last_pct:
+                    progress_cb(pct, "Encoding…")
+                    last_pct = pct
             elif line == "progress=end" and progress_cb:
                 progress_cb(100, "Validating output…")
         return_code = proc.wait()
-        stderr = proc.stderr.read() if proc.stderr else ""
+        for helper in helpers:
+            helper.join(timeout=2)
+        _check_cancel(cancel_event)
         if return_code != 0:
-            raise MediaError(f"FFmpeg failed (exit {return_code}):\n{stderr[-2200:]}")
-    except CancelledError:
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        raise
-    except Exception:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        raise
+            raise MediaError(f"FFmpeg failed (exit {return_code}):\n" + "\n".join(stderr_tail)[-2200:])
+    finally:
+        _terminate(proc)
 
 
 def _probe(path: Path, ffprobe: Optional[str]) -> dict:
@@ -456,7 +527,7 @@ def _probe(path: Path, ffprobe: Optional[str]) -> dict:
         p = subprocess.run(
             [ffprobe, "-v", "error", "-show_entries",
              "format=duration,size:stream=codec_name,codec_type,width,height,r_frame_rate",
-             "-of", "json", str(path)], capture_output=True, text=True, timeout=30,
+             "-of", "json", str(path)], capture_output=True, text=True, timeout=30, **_NO_WINDOW,
         )
         if p.returncode != 0:
             raise MediaError(f"Output validation failed: {(p.stderr or '').strip()[-1200:]}")
@@ -503,7 +574,7 @@ def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg
         duration = None
         if ffprobe:
             try:
-                p = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(source)], capture_output=True, text=True, timeout=10)
+                p = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(source)], capture_output=True, text=True, timeout=10, **_NO_WINDOW)
                 duration = float(p.stdout.strip()) if p.returncode == 0 and p.stdout.strip() else None
             except Exception:
                 duration = None
@@ -531,15 +602,35 @@ def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg
     return target
 
 
-def _collect_media_files(folder: Path) -> list[Path]:
-    found = []
+def _scan_work_dir(folder: Path) -> tuple[list[Path], list[Path], list[Path]]:
+    """One directory walk returning (media, subtitles, thumbnails).
+
+    Previously the work folder was walked three or four times per download.
+    """
+    media: list[tuple[float, str, Path]] = []
+    subtitles: list[Path] = []
+    thumbnails: list[Path] = []
     for p in folder.rglob("*"):
-        if not p.is_file() or p.suffix.lower() not in MEDIA_EXTENSIONS:
+        if not p.is_file():
             continue
-        if p.name.endswith((".part", ".ytdl")) or ".processing" in p.name:
-            continue
-        found.append(p)
-    return sorted(found, key=lambda p: p.stat().st_mtime)
+        suffix = p.suffix.lower()
+        if suffix in MEDIA_EXTENSIONS:
+            if ".processing" in p.name:
+                continue
+            try:
+                media.append((p.stat().st_mtime, p.name, p))
+            except OSError:
+                continue
+        elif suffix in SUBTITLE_EXTENSIONS:
+            subtitles.append(p)
+        elif suffix in THUMBNAIL_EXTENSIONS:
+            thumbnails.append(p)
+    media.sort()
+    return [item[2] for item in media], subtitles, thumbnails
+
+
+def _collect_media_files(folder: Path) -> list[Path]:
+    return _scan_work_dir(folder)[0]
 
 
 def download_and_process(url: str, output_dir: str, options: dict, job_id: str,
@@ -557,7 +648,7 @@ def download_and_process(url: str, output_dir: str, options: dict, job_id: str,
     output = Path(output_dir).expanduser()
     output.mkdir(parents=True, exist_ok=True)
     settings = settings or {}
-    last_report = {"pct": -1}
+    last_report = {"pct": -1, "t": 0.0}
 
     def hook(data):
         _check_cancel(cancel_event)
@@ -574,7 +665,13 @@ def download_and_process(url: str, output_dir: str, options: dict, job_id: str,
             if eta is not None:
                 label += f" · ETA {eta}s"
             if progress_cb:
-                progress_cb(min(68, int(pct * 0.68)), label)
+                # yt-dlp fires this hook many times per second; only forward a
+                # change in percentage or a label refresh at most once per second.
+                value = min(68, int(pct * 0.68))
+                now = time.monotonic()
+                if value != last_report["pct"] or now - last_report["t"] >= 1.0:
+                    last_report.update(pct=value, t=now)
+                    progress_cb(value, label)
         elif status == "finished":
             if progress_cb:
                 progress_cb(70, "Download finished · preparing media…")
@@ -606,26 +703,18 @@ def download_and_process(url: str, output_dir: str, options: dict, job_id: str,
         "writeinfojson": False,
     }
     # Respect the user connection and browser-session preferences.
-    connection_mode = str(settings.get("connection_mode") or "Automatic").lower()
-    if connection_mode == "direct":
-        ydl_opts["proxy"] = ""
-    elif connection_mode == "proxy":
-        proxy_url = str(settings.get("proxy_url") or "").strip()
-        if proxy_url:
-            ydl_opts["proxy"] = proxy_url
-        else:
-            raise MediaError("Proxy mode is selected, but no proxy URL is configured.")
-    browser = str(settings.get("cookies_browser") or "").strip().lower()
-    supported_browsers = {"brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale"}
-    profile = str(settings.get("cookies_profile") or "").strip()
-    if browser in supported_browsers and browser != "none":
-        ydl_opts["cookiesfrombrowser"] = (browser, profile or None)
+    ydl_opts.update(network_options(settings))
+    # Without this, a custom FFmpeg path from Settings was ignored by yt-dlp and
+    # separate video+audio streams could not be merged.
+    if ffmpeg_path and Path(ffmpeg_path).expanduser().is_file():
+        ydl_opts["ffmpeg_location"] = str(Path(ffmpeg_path).expanduser())
     if log_cb:
         log_cb("Starting yt-dlp. Downloads are processed locally.")
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
     except CancelledError:
+        shutil.rmtree(work_dir, ignore_errors=True)  # don't leak partial downloads on cancel
         raise
     except Exception as exc:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -635,11 +724,10 @@ def download_and_process(url: str, output_dir: str, options: dict, job_id: str,
     except CancelledError:
         shutil.rmtree(work_dir, ignore_errors=True)
         raise
-    media_files = _collect_media_files(work_dir)
+    media_files, subtitle_files, thumbnail_files = _scan_work_dir(work_dir)
     if not media_files:
         shutil.rmtree(work_dir, ignore_errors=True)
         raise MediaError("yt-dlp finished but no media file was found. The URL may be unsupported, unavailable, or protected.")
-    subtitle_files = [p for p in work_dir.rglob("*") if p.is_file() and p.suffix.lower() in {".srt", ".vtt", ".ass", ".ssa", ".ttml"}]
     results = []
     total = len(media_files)
     for index, source in enumerate(media_files, start=1):
@@ -650,7 +738,12 @@ def download_and_process(url: str, output_dir: str, options: dict, job_id: str,
                 progress_cb(start + int(max(0, min(100, pct)) * 0.25), f"{label} · item {index}/{total}")
         if log_cb:
             log_cb(f"Finalizing {source.name}")
-        matching_subtitles = [p for p in subtitle_files if p.stem == source.stem] or subtitle_files
+        # yt-dlp names sidecars "<media stem>.<lang>.<ext>". The old exact-stem test
+        # never matched, so every playlist item received *all* subtitle files.
+        prefix = source.stem + "."
+        matching_subtitles = [p for p in subtitle_files if p.name.startswith(prefix)]
+        if not matching_subtitles and total == 1:
+            matching_subtitles = subtitle_files
         try:
             target = _finalize(source, output, options, f"{job_id}-{index}", ffmpeg_path,
                                ffprobe_path, cancel_event, finalize_progress, matching_subtitles)
@@ -658,12 +751,13 @@ def download_and_process(url: str, output_dir: str, options: dict, job_id: str,
             shutil.rmtree(work_dir, ignore_errors=True)
             raise
         if options.get("download_thumbnail"):
-            for thumb in work_dir.glob(source.stem + ".*"):
-                if thumb.is_file() and thumb.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
-                    try:
-                        shutil.copy2(thumb, _unique_path(output / f"{target.stem}{thumb.suffix.lower()}"))
-                    except OSError:
-                        pass
+            # Path.glob(stem + ".*") treated the "[video-id]" in the stem as a
+            # character class and never found the thumbnail.
+            for thumb in (p for p in thumbnail_files if p.stem == source.stem):
+                try:
+                    shutil.copy2(thumb, _unique_path(output / f"{target.stem}{thumb.suffix.lower()}"))
+                except OSError:
+                    pass
         results.append(target)
         if log_cb:
             log_cb(f"Saved: {target}")
