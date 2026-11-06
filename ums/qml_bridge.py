@@ -302,7 +302,7 @@ class AppBridge(QObject):
             return
         worker = LyricsSearchWorker(title, artist, self)
         self.lyrics_worker = worker
-        worker.completed.connect(self.lyricsReady.emit)
+        worker.structuredCompleted.connect(self.lyricsReady.emit)
         worker.failed.connect(self._notify)
         worker.finished.connect(lambda worker=worker: self._release_lyrics_worker(worker))
         worker.start()
