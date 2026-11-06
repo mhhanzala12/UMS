@@ -488,6 +488,29 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
     started_ns = time.time_ns()
     last_report = {"pct": -1, "t": 0.0}
 
+    # Prefer one authoritative cover source. Download catalog artwork once and
+    # let Mutagen embed it, instead of asking yt-dlp to embed its thumbnail too.
+    # Running both post-processors used to leave multiple APIC frames in MP3s.
+    image_data = b""
+    mime = "image/jpeg"
+    if metadata and metadata.get("cover"):
+        try:
+            request = Request(str(metadata["cover"]), headers={"User-Agent": SPOTIFY_USER_AGENT})
+            with urlopen(request, timeout=12) as response:
+                image_data = response.read()
+            if image_data.startswith(b"\\x89PNG"):
+                mime = "image/png"
+            elif image_data.startswith(b"\\xff\\xd8"):
+                mime = "image/jpeg"
+            else:
+                image_data = b""
+                if log_cb:
+                    log_cb("Catalog artwork had an unsupported image format; using the source thumbnail instead.")
+        except Exception as art_error:
+            image_data = b""
+            if log_cb:
+                log_cb(f"Catalog artwork could not be downloaded; using the source thumbnail instead: {art_error}")
+
     def report(data):
         if cancel_event and cancel_event.is_set():
             raise CancelledError("Music download cancelled.")
@@ -511,6 +534,15 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
         elif status == "finished" and progress_cb:
             progress_cb(96, "Download complete · tagging audio…")
 
+    postprocessors = [
+        {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "0"},
+        {"key": "FFmpegMetadata", "add_metadata": True},
+    ]
+    # If catalog artwork was fetched, Mutagen embeds exactly that one image.
+    # Otherwise retain yt-dlp's thumbnail embed as a useful fallback.
+    if not image_data:
+        postprocessors.append({"key": "EmbedThumbnail"})
+
     options = {
         "format": "bestaudio/best",
         "outtmpl": str(output / "%(title).180B [%(id)s].%(ext)s"),
@@ -523,13 +555,9 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
         "fragment_retries": 3,
         "continuedl": True,
         "overwrites": False,
-        "writethumbnail": True,
+        "writethumbnail": not bool(image_data),
         "progress_hooks": [report],
-        "postprocessors": [
-            {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "0"},
-            {"key": "FFmpegMetadata", "add_metadata": True},
-            {"key": "EmbedThumbnail"},
-        ],
+        "postprocessors": postprocessors,
     }
     if ffmpeg_path:
         options["ffmpeg_location"] = str(ffmpeg_path)
@@ -592,19 +620,6 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
             title = str(metadata.get("title") or "")
             artist = str(metadata.get("artist") or "")
             album = str(metadata.get("album") or "")
-            image_data = b""
-            mime = "image/jpeg"
-            if metadata.get("cover"):
-                # Download the artwork once, not once per output file.
-                try:
-                    request = Request(str(metadata["cover"]), headers={"User-Agent": SPOTIFY_USER_AGENT})
-                    with urlopen(request, timeout=12) as response:
-                        image_data = response.read()
-                    # Was b"\\x89PNG" (escaped backslash), which never matched a real PNG header.
-                    mime = "image/png" if image_data.startswith(b"\x89PNG") else "image/jpeg"
-                except Exception as art_error:
-                    image_data = b""
-                    if log_cb: log_cb(f"Cover artwork could not be embedded: {art_error}")
             for file_path in files:
                 try:
                     tags = ID3(file_path)
@@ -614,6 +629,8 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
                 if artist: tags.add(TPE1(encoding=3, text=artist))
                 if album: tags.add(TALB(encoding=3, text=album))
                 if image_data:
+                    # Replace inherited APIC frames so the file has one front cover.
+                    tags.delall("APIC")
                     tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=image_data))
                 tags.save(file_path)
         except Exception as tag_error:
