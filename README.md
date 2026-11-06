@@ -138,6 +138,7 @@ UniversalMediaStudio/
 
 - **yt-dlp missing or YouTube formats unavailable:** run `python -m pip install -U "yt-dlp[default]"` in the project environment and install Deno (or another yt-dlp-supported JavaScript runtime) on PATH. Restart the app. For videos that require sign-in, configure supported browser cookies in yt-dlp; the app does not bypass access controls.
 - **FFmpeg missing:** install FFmpeg, restart the app, and check Settings → Detected tools.
+- **The app closes or shows no window at startup:** run `run_windows.bat` from the project folder. The QML/Python startup diagnostics are written to `%USERPROFILE%\.universal_media_studio\startup.log`; send that file when reporting a launch failure. When using a packaged executable, rebuild with `builder.bat` after pulling source changes.
 - **Separate streams fail to merge:** install FFmpeg and ensure `ffmpeg` is on PATH.
 - **Encoder not found:** your FFmpeg build may not include that encoder; choose another codec or install a build with the required encoder.
 - **MP3 attached-picture streams:** FFmpeg reports embedded album art as video streams (often PNG/JPEG). These are cover images, not playable video. UMS audio-only conversion maps only the audio stream, so the pictures are not exported as video. The Music downloader uses one cover source at a time to avoid duplicate APIC artwork frames.
