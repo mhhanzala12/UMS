@@ -83,6 +83,7 @@ ApplicationWindow {
     property string lyricsRequestedTitle: ""
     property string lyricsRequestedArtist: ""
     property string lyricsMessage: ""
+    property string lyricsSource: ""
     property bool lyricsTimed: false
     property bool lyricsSynchronized: false
     property var lyricsLines: []
@@ -297,6 +298,7 @@ ApplicationWindow {
                 lyricsRequestedTitle = payload.request_title || lyricsTitle
                 lyricsRequestedArtist = payload.request_artist || lyricsArtist
                 lyricsTimed = payload.synchronized === true
+                lyricsSource = payload.source || ""
                 lyricsMessage = payload.message || ""
                 refreshLyricsSyncState()
                 lyricsDialog.open()
@@ -2398,6 +2400,7 @@ ApplicationWindow {
         lyrics: lyricsLines
         message: lyricsMessage
         lyricsSynchronized: lyricsSynchronized
+        source: lyricsSource
         positionMs: playerPosition
         durationMs: playerDuration
         playing: playerPlaying
