@@ -155,7 +155,7 @@ def lyric_match_score(
 
     if requested_artist and candidate_artist:
         artist_score = _text_similarity(requested_artist, candidate_artist)
-        if artist_score < 0.22 and title_score < 0.96:
+        if artist_score < 0.22:
             return 0.0
     else:
         artist_score = 0.72
