@@ -298,6 +298,8 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
         for sub in subtitle_files:
             cmd += ["-i", str(sub)]
     if is_audio:
+        # MP3 cover art is exposed as attached-picture video streams. Map only
+        # the first audio stream so audio exports never remux album art as video.
         cmd += ["-vn", "-map", "0:a:0?"]
         cmd += ["-c:a", amap.get(acodec_choice, "copy")]
         audio_bitrate = _parse_bitrate(options.get("audio_bitrate", ""))
