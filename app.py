@@ -16,9 +16,6 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from ums.qml_bridge import AppBridge
-
-
 def _configure_startup_logging():
     log_path = Path.home() / ".universal_media_studio" / "startup.log"
     try:
@@ -47,6 +44,11 @@ def main():
         app = QApplication(sys.argv)
         app.setApplicationName("Universal Media Studio")
         app.setOrganizationName("Universal Media Studio")
+
+        # Import the Python bridge inside the guarded startup path so import or
+        # dependency errors are written to startup.log instead of being silent
+        # in a windowed executable.
+        from ums.qml_bridge import AppBridge
 
         resource_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
         font_path = resource_root / "ums" / "fonts" / "Inter-Variable.ttf"
