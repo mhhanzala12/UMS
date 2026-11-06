@@ -215,7 +215,7 @@ class LyricsSearchWorker(QThread):
                     "lines": lines,
                     "message": "" if lines else "No lyrics text was returned.",
                 }
-            display_text = "\\n".join(line["text"] for line in payload["lines"])
+            display_text = "\n".join(line["text"] for line in payload["lines"])
             if not display_text:
                 display_text = payload["message"] or "No lyrics found for this track."
             self.completed.emit(display_text)
