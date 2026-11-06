@@ -325,7 +325,9 @@ class AppBridge(QObject):
             and artist.casefold() == str(current.get("artist") or "").strip().casefold()
         )
         album = str(current.get("album") or "") if same_track else ""
-        duration = max(0, self.player.duration() / 1000.0) if same_track else None
+        current_path = str(current.get("path") or "")
+        is_preview_url = current_path.startswith(("http://", "https://"))
+        duration = max(0, self.player.duration() / 1000.0) if same_track and not is_preview_url else None
         worker = LyricsSearchWorker(title, artist, self, album=album, duration=duration)
         self.lyrics_worker = worker
         worker.structuredCompleted.connect(self.lyricsReady.emit)
