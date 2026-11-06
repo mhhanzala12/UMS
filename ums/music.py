@@ -498,9 +498,9 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
             request = Request(str(metadata["cover"]), headers={"User-Agent": SPOTIFY_USER_AGENT})
             with urlopen(request, timeout=12) as response:
                 image_data = response.read()
-            if image_data.startswith(b"\\x89PNG"):
+            if image_data.startswith(b"\x89PNG"):
                 mime = "image/png"
-            elif image_data.startswith(b"\\xff\\xd8"):
+            elif image_data.startswith(b"\xff\xd8"):
                 mime = "image/jpeg"
             else:
                 image_data = b""
