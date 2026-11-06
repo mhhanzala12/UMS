@@ -20,6 +20,15 @@ def _valid_preset_name(name):
     )
 
 
+DOWNLOAD_PROFILE_NAMES = (
+    "Best Available Quality",
+    "Audio Only",
+    "Lossless Audio",
+    "3GP Legacy Mobile",
+    "MP4 Universal Compatibility",
+)
+
+
 PRESETS = {
     "Best Available Quality": {
         "format": "bestvideo+bestaudio/best", "container": "mkv", "video_codec": "copy",
