@@ -111,6 +111,7 @@ Dialog {
                     width: parent.width
                     text: root.songTitle || "Now playing"
                     color: "#f0f2ed"
+                    font.family: "Inter"
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
                     horizontalAlignment: Text.AlignHCenter
@@ -120,6 +121,7 @@ Dialog {
                     width: parent.width
                     text: root.artistName
                     color: "#77816e"
+                    font.family: "Inter"
                     font.pixelSize: 10
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight
@@ -208,9 +210,9 @@ Dialog {
                     property bool canSeek: root.synchronized && Number(modelData.time_ms) >= 0
 
                     Rectangle {
-                        anchors.fill: parent
-                        anchors.leftMargin: Math.max(0, (parent.width - Math.min(parent.width, lyricText.implicitWidth + 40)) / 2)
-                        anchors.rightMargin: anchors.leftMargin
+                        width: Math.min(parent.width - 8, lyricText.width + 28)
+                        height: parent.height
+                        anchors.centerIn: parent
                         radius: 12
                         color: lyricMouse.containsMouse ? "#191d18" : "transparent"
                         opacity: lyricMouse.containsMouse ? 1 : 0.9
@@ -218,12 +220,10 @@ Dialog {
 
                     Text {
                         id: lyricText
-                        anchors.fill: parent
-                        anchors.leftMargin: 12
-                        anchors.rightMargin: 12
-                        anchors.topMargin: 4
-                        anchors.bottomMargin: 4
+                        width: Math.max(80, Math.min(parent.width - 48, 760))
+                        anchors.centerIn: parent
                         text: modelData.text || ""
+                        font.family: "Inter"
                         color: lyricDelegate.activeLine ? root.accentColor : "#899282"
                         opacity: lyricDelegate.activeLine ? 1 : 0.66
                         font.pixelSize: lyricDelegate.activeLine ? 20 : 15
