@@ -290,7 +290,7 @@ def _fetch_liriqo_lyrics(
     if duration and duration > 0:
         params["duration"] = str(int(duration))
     url = "https://api.liriqo-alfarrizi.my.id/v1/lyrics?" + urlencode(params)
-    data = _lyrics_json(url, timeout=24)
+    data = _lyrics_json(url, timeout=30)
     if data.get("error"):
         raise RuntimeError(str(data["error"]))
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
