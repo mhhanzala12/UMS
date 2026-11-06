@@ -972,6 +972,10 @@ class AppBridge(QObject):
         if self.active_worker and self.active_worker.isRunning():
             self.active_worker.cancel()
             self.active_worker.wait(4000)
+        if self.lyrics_worker and self.lyrics_worker.isRunning():
+            # LRCLIB requests use a 12-second network timeout; wait for the
+            # worker to leave before Qt tears down its owning AppBridge.
+            self.lyrics_worker.wait(13000)
 
 
     @Slot(result=str)
