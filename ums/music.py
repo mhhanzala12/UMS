@@ -20,7 +20,7 @@ from urllib.request import Request, url2pathname, urlopen
 from PySide6.QtCore import QThread, Signal
 
 from .config import APP_DIR, atomic_write_text, load_settings, update_settings
-from .lyrics import parse_lrc
+from .lyrics import lyric_match_score, parse_lrc, parse_ttml
 from .engine import CancelledError, network_options
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".aiff", ".wma"}
@@ -166,6 +166,212 @@ def search_catalog(query: str, provider: str = "All", limit: int = 20, kind: str
     return results[:limit]
 
 
+def _lyrics_json(url: str, timeout: int = 16) -> dict:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "UniversalMediaStudio/1.0 (lyrics lookup)",
+            "Accept": "application/json",
+        },
+    )
+    with urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _plain_lyric_lines(text: str) -> list[dict]:
+    return [
+        {"time_ms": -1, "text": line.strip()}
+        for line in str(text or "").splitlines()
+        if line.strip()
+    ]
+
+
+def _timed_rows(rows) -> list[dict]:
+    result = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("text") or "").strip()
+        raw_time = row.get("start", row.get("time_ms"))
+        try:
+            time_ms = int(float(raw_time))
+        except (TypeError, ValueError):
+            continue
+        if text and time_ms >= 0:
+            result.append({"time_ms": time_ms, "text": text})
+    result.sort(key=lambda item: item["time_ms"])
+    return result
+
+
+def _lyrics_candidate(
+    source: str,
+    title: str,
+    artist: str,
+    duration: float | None,
+    lines: list[dict],
+    plain: str = "",
+    sync_level: str = "plain",
+    match_title: str = "",
+    match_artist: str = "",
+    match_duration: float | None = None,
+    preferred: bool = False,
+) -> dict | None:
+    lines = [dict(row) for row in (lines or []) if str(row.get("text") or "").strip()]
+    if not lines and plain:
+        lines = _plain_lyric_lines(plain)
+    if not lines:
+        return None
+    score = lyric_match_score(
+        title,
+        artist,
+        match_title or title,
+        match_artist or artist,
+        duration,
+        match_duration,
+    )
+    if score < 0.62:
+        return None
+    timed = any(int(row.get("time_ms", -1)) >= 0 for row in lines)
+    level = str(sync_level or ("line" if timed else "plain")).lower()
+    quality = 4 if any(value in level for value in ("syllable", "word", "character")) else (3 if timed else 0)
+    return {
+        "source": source,
+        "title": match_title or title,
+        "artist": match_artist or artist,
+        "duration": match_duration,
+        "lines": lines,
+        "synchronized": timed,
+        "sync_level": level,
+        "quality": quality,
+        "match_score": score,
+        "preferred": bool(preferred),
+    }
+
+
+def _fetch_lrclib_lyrics(title: str, artist: str, duration: float | None) -> list[dict]:
+    params = urlencode({"track_name": title, "artist_name": artist})
+    request = Request(
+        "https://lrclib.net/api/search?" + params,
+        headers={"User-Agent": "UniversalMediaStudio/1.0 (lyrics lookup)", "Accept": "application/json"},
+    )
+    with urlopen(request, timeout=16) as response:
+        rows = json.loads(response.read().decode("utf-8"))
+    candidates = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        synced = str(row.get("syncedLyrics") or "")
+        plain = str(row.get("plainLyrics") or "")
+        lines = parse_lrc(synced)
+        candidate = _lyrics_candidate(
+            "LRCLIB",
+            title,
+            artist,
+            duration,
+            lines,
+            plain,
+            "line" if lines else "plain",
+            row.get("trackName") or "",
+            row.get("artistName") or "",
+            row.get("duration"),
+        )
+        if candidate:
+            candidates.append(candidate)
+    return candidates
+
+
+def _fetch_liriqo_lyrics(
+    title: str, artist: str, album: str, duration: float | None
+) -> list[dict]:
+    params = {"title": title, "artist": artist, "full": "1"}
+    if album:
+        params["album"] = album
+    if duration and duration > 0:
+        params["duration"] = str(int(duration))
+    url = "https://api.liriqo-alfarrizi.my.id/v1/lyrics?" + urlencode(params)
+    data = _lyrics_json(url, timeout=24)
+    if data.get("error"):
+        raise RuntimeError(str(data["error"]))
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    tracks = data.get("tracks") if isinstance(data.get("tracks"), list) else []
+    primary = data.get("primary")
+    if isinstance(primary, dict):
+        tracks = [primary] + tracks
+
+    candidates = []
+    seen = set()
+    for track in tracks:
+        if not isinstance(track, dict):
+            continue
+        track_title = str(track.get("title") or metadata.get("title") or title)
+        track_artist = str(track.get("artist") or metadata.get("artist") or artist)
+        track_duration = track.get("duration") or metadata.get("duration")
+        timed = _timed_rows(track.get("timed"))
+        if not timed and track.get("lrc"):
+            timed = parse_lrc(str(track.get("lrc")))
+        plain = str(track.get("plain") or "")
+        source = str(
+            track.get("upstreamProvider")
+            or track.get("lyricsSource")
+            or track.get("provider")
+            or "LiriQo"
+        )
+        sync_level = str(track.get("syncLevel") or ("line" if timed else "plain"))
+        key = (source, tuple((line["time_ms"], line["text"]) for line in timed[:4]), plain[:80])
+        if key in seen:
+            continue
+        seen.add(key)
+        candidate = _lyrics_candidate(
+            source,
+            title,
+            artist,
+            duration,
+            timed,
+            plain,
+            sync_level,
+            track_title,
+            track_artist,
+            track_duration,
+            preferred=track is primary,
+        )
+        if candidate:
+            candidates.append(candidate)
+    return candidates
+
+
+def _fetch_betterlyrics_lyrics(
+    endpoint: str,
+    source: str,
+    title: str,
+    artist: str,
+    album: str,
+    duration: float | None,
+) -> list[dict]:
+    params = {"s": title, "a": artist, "al": album, "d": str(int(duration or 0))}
+    url = "https://api.betterlyrics.org/" + endpoint.lstrip("/") + "?" + urlencode(params)
+    data = _lyrics_json(url, timeout=14)
+    if data.get("error"):
+        raise RuntimeError(str(data["error"]))
+    raw = str(data.get("ttml") or data.get("lyrics") or "")
+    lines = parse_ttml(raw) if endpoint == "getLyrics" else parse_lrc(raw)
+    return [
+        candidate
+        for candidate in [
+            _lyrics_candidate(
+                source,
+                title,
+                artist,
+                duration,
+                lines,
+                "",
+                "syllable" if endpoint == "getLyrics" else "line",
+            )
+        ]
+        if candidate
+    ]
+
+
 class LyricsSearchWorker(QThread):
     # Keep completed as plain text for the legacy Widgets UI. The QML player
     # consumes structuredCompleted so it can synchronize timestamped rows.
@@ -173,47 +379,83 @@ class LyricsSearchWorker(QThread):
     structuredCompleted = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, title: str, artist: str, parent=None):
+    def __init__(self, title: str, artist: str, parent=None, album: str = "", duration: float | None = None):
         super().__init__(parent)
         self.title = str(title or "").strip()
         self.artist = str(artist or "").strip()
+        self.album = str(album or "").strip()
+        try:
+            self.duration = float(duration or 0) or None
+        except (TypeError, ValueError):
+            self.duration = None
 
     def run(self):
+        providers = [
+            ("LRCLIB", lambda: _fetch_lrclib_lyrics(self.title, self.artist, self.duration)),
+            ("LiriQo", lambda: _fetch_liriqo_lyrics(self.title, self.artist, self.album, self.duration)),
+            ("Better Lyrics · TTML", lambda: _fetch_betterlyrics_lyrics(
+                "getLyrics", "Better Lyrics · TTML", self.title, self.artist, self.album, self.duration
+            )),
+            ("Better Lyrics · KuGou", lambda: _fetch_betterlyrics_lyrics(
+                "kugou/getLyrics", "Better Lyrics · KuGou", self.title, self.artist, self.album, self.duration
+            )),
+        ]
+        candidates = []
+        errors = []
         try:
-            params = urlencode({"track_name": self.title, "artist_name": self.artist})
-            request = Request("https://lrclib.net/api/search?" + params, headers={"User-Agent": "UniversalMediaStudio/1.0"})
-            with urlopen(request, timeout=12) as response:
-                rows = json.loads(response.read().decode("utf-8"))
-            row = next((item for item in rows if item.get("syncedLyrics")), None)
-            if row is None:
-                row = next((item for item in rows if item.get("plainLyrics")), None)
-            if row is None:
+            # Provider calls are independent; fan them out so a slow endpoint
+            # does not add its full timeout after every other source.
+            with ThreadPoolExecutor(max_workers=len(providers)) as pool:
+                futures = [(name, pool.submit(fetch)) for name, fetch in providers]
+                for name, future in futures:
+                    try:
+                        candidates.extend(future.result())
+                    except Exception as exc:
+                        errors.append(f"{name}: {exc}")
+
+            synced = [item for item in candidates if item["synchronized"]]
+            plain = [item for item in candidates if not item["synchronized"]]
+            selected = max(
+                synced or plain,
+                key=lambda item: (
+                    item["match_score"],
+                    item["quality"],
+                    item["preferred"],
+                ),
+                default=None,
+            )
+            if selected is None:
+                unavailable = len(errors) == len(providers)
+                message = (
+                    "Lyrics providers are temporarily unavailable. Try again later."
+                    if unavailable
+                    else "No lyrics found for this track."
+                )
                 payload = {
                     "title": self.title,
                     "artist": self.artist,
                     "request_title": self.title,
                     "request_artist": self.artist,
                     "synchronized": False,
+                    "source": "",
+                    "sync_level": "plain",
                     "lines": [],
-                    "message": "No lyrics found for this track.",
+                    "message": message,
+                    "providers_checked": [name for name, _fetch in providers],
                 }
             else:
-                synced = str(row.get("syncedLyrics") or "")
-                plain = str(row.get("plainLyrics") or "")
-                lines = parse_lrc(synced)
-                synchronized = bool(lines)
-                if not lines:
-                    lines = [{"time_ms": -1, "text": line.strip()}
-                             for line in plain.splitlines() if line.strip()]
                 payload = {
-                    "title": row.get("trackName") or self.title,
-                    "artist": row.get("artistName") or self.artist,
+                    "title": selected["title"],
+                    "artist": selected["artist"],
                     "request_title": self.title,
                     "request_artist": self.artist,
-                    "duration": row.get("duration"),
-                    "synchronized": synchronized,
-                    "lines": lines,
-                    "message": "" if lines else "No lyrics text was returned.",
+                    "duration": selected.get("duration"),
+                    "synchronized": selected["synchronized"],
+                    "source": selected["source"],
+                    "sync_level": selected["sync_level"],
+                    "lines": selected["lines"],
+                    "message": "" if selected["synchronized"] else "These lyrics are not timestamped.",
+                    "providers_checked": [name for name, _fetch in providers],
                 }
             display_text = "\n".join(line["text"] for line in payload["lines"])
             if not display_text:
@@ -222,7 +464,6 @@ class LyricsSearchWorker(QThread):
             self.structuredCompleted.emit(json.dumps(payload, ensure_ascii=False))
         except Exception as exc:
             self.failed.emit(f"Lyrics lookup failed: {exc}")
-
 
 class CatalogSearchWorker(QThread):
     completed = Signal(object)
