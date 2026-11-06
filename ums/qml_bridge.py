@@ -92,7 +92,7 @@ class AppBridge(QObject):
         self.player.mediaStatusChanged.connect(self._on_media_status)
         self.player.positionChanged.connect(lambda value: self.playerChanged.emit(json.dumps({"position": value})))
         self.player.durationChanged.connect(lambda value: self.playerChanged.emit(json.dumps({"duration": value})))
-        self.player.playbackStateChanged.connect(lambda value: self.playerChanged.emit(json.dumps({"state": int(value)})))
+        self.player.playbackStateChanged.connect(lambda value: self.playerChanged.emit(json.dumps({"state": int(value.value if hasattr(value, "value") else value)})))
         self._emit_initial()
 
     def _emit_initial(self):
@@ -652,7 +652,7 @@ class AppBridge(QObject):
     @Slot()
     def stopPlayback(self):
         self.player.stop()
-        self.playerChanged.emit(json.dumps({"state": int(self.player.playbackState()), "position": 0}))
+        self.playerChanged.emit(json.dumps({"state": int(self.player.playbackState().value), "position": 0}))
 
     @Slot()
     def toggleMute(self):
