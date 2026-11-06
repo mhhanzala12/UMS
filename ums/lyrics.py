@@ -140,6 +140,14 @@ def _text_similarity(left: str, right: str) -> float:
     return max(SequenceMatcher(None, left, right).ratio(), overlap)
 
 
+def _artist_similarity(left: str, right: str) -> float:
+    left_tokens = set(_normalise_track_text(left).split())
+    right_tokens = set(_normalise_track_text(right).split())
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / max(1, len(left_tokens | right_tokens))
+
+
 def lyric_match_score(
     requested_title: str,
     requested_artist: str,
@@ -154,7 +162,7 @@ def lyric_match_score(
         return 0.0
 
     if requested_artist and candidate_artist:
-        artist_score = _text_similarity(requested_artist, candidate_artist)
+        artist_score = _artist_similarity(requested_artist, candidate_artist)
         if artist_score < 0.35:
             return 0.0
     else:
