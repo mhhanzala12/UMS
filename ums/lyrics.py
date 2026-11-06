@@ -1,4 +1,4 @@
-"""Helpers for parsing LRCLIB synchronized lyrics without Qt dependencies."""
+"""Qt-independent parsers and matching helpers for synchronized lyrics."""
 from __future__ import annotations
 
 import re
