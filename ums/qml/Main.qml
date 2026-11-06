@@ -1452,7 +1452,10 @@ ApplicationWindow {
                                     // Ignore malformed custom profile labels such as "gg." while
                                     // preserving all named built-in and valid custom presets.
                                     model: Object.keys(presets).filter(function(name) {
-                                        return /^[A-Za-z0-9][A-Za-z0-9 &()_-]{0,47}$/.test(name)
+                                        return name.length > 0 && name.length <= 48
+                                                && name.trim() === name
+                                                && !/[<>:"/\\|?*\u0000-\u001f]/.test(name)
+                                                && !name.endsWith(".")
                                     })
                                     currentIndex: Math.max(0, model.indexOf(presetName))
                                     onActivated: presetName = currentText
