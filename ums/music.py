@@ -188,6 +188,8 @@ class LyricsSearchWorker(QThread):
                 payload = {
                     "title": self.title,
                     "artist": self.artist,
+                    "request_title": self.title,
+                    "request_artist": self.artist,
                     "synchronized": False,
                     "lines": [],
                     "message": "No lyrics found for this track.",
@@ -203,6 +205,8 @@ class LyricsSearchWorker(QThread):
                 payload = {
                     "title": row.get("trackName") or self.title,
                     "artist": row.get("artistName") or self.artist,
+                    "request_title": self.title,
+                    "request_artist": self.artist,
                     "duration": row.get("duration"),
                     "synchronized": synchronized,
                     "lines": lines,
