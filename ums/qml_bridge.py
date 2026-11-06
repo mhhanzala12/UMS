@@ -292,12 +292,25 @@ class AppBridge(QObject):
 
     @Slot(str, str)
     def findLyrics(self, title, artist):
-        if self.lyrics_worker and self.lyrics_worker.isRunning():
+        title = str(title or "").strip()
+        artist = str(artist or "").strip()
+        if not title:
+            self._notify("Choose a playing track before looking up lyrics.")
             return
-        self.lyrics_worker = LyricsSearchWorker(str(title), str(artist), self)
-        self.lyrics_worker.completed.connect(self.lyricsReady.emit)
-        self.lyrics_worker.failed.connect(self._notify)
-        self.lyrics_worker.start()
+        if self.lyrics_worker and self.lyrics_worker.isRunning():
+            self._notify("A lyrics lookup is already in progress.")
+            return
+        worker = LyricsSearchWorker(title, artist, self)
+        self.lyrics_worker = worker
+        worker.completed.connect(self.lyricsReady.emit)
+        worker.failed.connect(self._notify)
+        worker.finished.connect(lambda worker=worker: self._release_lyrics_worker(worker))
+        worker.start()
+
+    def _release_lyrics_worker(self, worker):
+        if self.lyrics_worker is worker:
+            self.lyrics_worker = None
+        worker.deleteLater()
 
     @Slot()
     def chooseConversionSource(self):
