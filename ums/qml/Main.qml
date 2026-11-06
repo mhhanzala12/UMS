@@ -80,9 +80,21 @@ ApplicationWindow {
     property string analysisText: ""
     property string lyricsTitle: ""
     property string lyricsArtist: ""
+    property string lyricsRequestedTitle: ""
+    property string lyricsRequestedArtist: ""
     property string lyricsMessage: ""
+    property bool lyricsTimed: false
     property bool lyricsSynchronized: false
     property var lyricsLines: []
+
+    function refreshLyricsSyncState() {
+        var sameTrack = playerPath.length > 0
+                && lyricsRequestedTitle.trim().toLowerCase() === playerTitle.trim().toLowerCase()
+                && lyricsRequestedArtist.trim().toLowerCase() === playerArtist.trim().toLowerCase()
+        lyricsSynchronized = lyricsTimed && sameTrack
+        if (lyricsTimed && !sameTrack)
+            lyricsMessage = "Timed lyrics are available, but this is not the track currently loaded in the player."
+    }
 
     function refreshState() {
         queueItems = JSON.parse(bridge.queueJson())
@@ -268,8 +280,11 @@ ApplicationWindow {
                 lyricsLines = payload.lines || []
                 lyricsTitle = payload.title || playerTitle
                 lyricsArtist = payload.artist || playerArtist
-                lyricsSynchronized = payload.synchronized === true
+                lyricsRequestedTitle = payload.request_title || lyricsTitle
+                lyricsRequestedArtist = payload.request_artist || lyricsArtist
+                lyricsTimed = payload.synchronized === true
                 lyricsMessage = payload.message || ""
+                refreshLyricsSyncState()
                 lyricsDialog.open()
             } catch (error) {
                 toast.showMessage("Lyrics could not be displayed.", true)
@@ -290,6 +305,7 @@ ApplicationWindow {
             if (data.position !== undefined) playerPosition = data.position
             if (data.duration !== undefined) playerDuration = data.duration
             if (data.state !== undefined) playerPlaying = data.state === 1
+            refreshLyricsSyncState()
         }
         function onAnalysisReady(value) { analysisBusy = false
  analysisText = JSON.stringify(JSON.parse(value), null, 2)
