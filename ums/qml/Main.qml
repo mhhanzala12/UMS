@@ -78,7 +78,11 @@ ApplicationWindow {
     property var selectedTrack: ({})
     property bool analysisBusy: false
     property string analysisText: ""
-    property string lyricsText: ""
+    property string lyricsTitle: ""
+    property string lyricsArtist: ""
+    property string lyricsMessage: ""
+    property bool lyricsSynchronized: false
+    property var lyricsLines: []
 
     function refreshState() {
         queueItems = JSON.parse(bridge.queueJson())
@@ -258,8 +262,19 @@ ApplicationWindow {
         function onLibraryChanged(value) { libraryItems = JSON.parse(value) }
         function onConversionSourceSelected(value) { conversionSource.text = value }
         function onPlaylistsChanged(value) { playlistData = JSON.parse(value) }
-        function onLyricsReady(value) { lyricsText = value
- lyricsDialog.open() }
+        function onLyricsReady(value) {
+            try {
+                var payload = JSON.parse(value)
+                lyricsLines = payload.lines || []
+                lyricsTitle = payload.title || playerTitle
+                lyricsArtist = payload.artist || playerArtist
+                lyricsSynchronized = payload.synchronized === true
+                lyricsMessage = payload.message || ""
+                lyricsDialog.open()
+            } catch (error) {
+                toast.showMessage("Lyrics could not be displayed.", true)
+            }
+        }
         function onPlayerChanged(value) {
             var data = JSON.parse(value)
             if (data.song && data.song.path) { playerTitle = data.song.title || "Unknown track"
@@ -1418,7 +1433,11 @@ ApplicationWindow {
                                 ComboBox {
                                     id: downloadPreset
                                     Layout.fillWidth: true
-                                    model: Object.keys(presets)
+                                    // Ignore malformed custom profile labels such as "gg." while
+                                    // preserving all named built-in and valid custom presets.
+                                    model: Object.keys(presets).filter(function(name) {
+                                        return /^[A-Za-z0-9][A-Za-z0-9 &()_-]{0,47}$/.test(name)
+                                    })
                                     currentIndex: Math.max(0, model.indexOf(presetName))
                                     onActivated: presetName = currentText
                                     background: Rectangle { radius: 7; color: themeColors.panel2; border.color: themeColors.border }
@@ -2339,20 +2358,22 @@ ApplicationWindow {
  wrapMode: Text.Wrap
  padding: 18 }
     }
-    Dialog {
+    LyricsDialog {
         id: lyricsDialog
-        modal: true
- anchors.centerIn: parent
- width: Math.min(620, window.width - 60)
-        title: "Lyrics"
-        standardButtons: Dialog.Ok
-        background: Rectangle { color: themeColors.panel
- radius: 12
- border.color: themeColors.border }
-        contentItem: ScrollView { TextArea { text: lyricsText
- readOnly: true
- color: themeColors.text
- wrapMode: TextArea.Wrap } }
+        songTitle: lyricsTitle || playerTitle
+        artistName: lyricsArtist || playerArtist
+        lyrics: lyricsLines
+        message: lyricsMessage
+        synchronized: lyricsSynchronized
+        positionMs: playerPosition
+        durationMs: playerDuration
+        playing: playerPlaying
+        accentColor: themeColors.lime
+        mutedColor: themeColors.muted
+        onSeekRequested: function(position) { bridge.seekPlayer(position) }
+        onToggleRequested: bridge.togglePlayback()
+        onPreviousRequested: bridge.playPrevious()
+        onNextRequested: bridge.playNext()
     }
     Popup {
         id: toast
