@@ -121,10 +121,15 @@ def parse_ttml(source: str) -> list[dict]:
 
 
 def _normalise_track_text(value: str) -> str:
-    value = unicodedata.normalize("NFKD", str(value or "").casefold())
-    value = "".join(char for char in value if not unicodedata.combining(char))
+    value = unicodedata.normalize("NFKC", str(value or "").casefold())
     value = re.sub(r"\b(?:feat|ft|featuring)\b.*$", " ", value)
-    return " ".join(re.sub(r"[^a-z0-9]+", " ", value).split())
+    # Preserve Unicode letters and combining marks so Bengali, Arabic, CJK,
+    # and other non-Latin track metadata can still be matched.
+    value = "".join(
+        char if char.isalnum() or unicodedata.category(char).startswith("M") else " "
+        for char in value
+    )
+    return " ".join(value.split())
 
 
 def _text_similarity(left: str, right: str) -> float:
