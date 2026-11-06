@@ -89,8 +89,8 @@ ApplicationWindow {
 
     function normalizeTrackText(value) {
         return String(value || "").toLowerCase()
-                .replace(/\\([^)]*\\)/g, " ")
-                .replace(/\\b(feat|ft|featuring)\\.?\\b.*$/g, " ")
+                .replace(/\([^)]*\)/g, " ")
+                .replace(/\b(feat|ft|featuring)\.?\b.*$/g, " ")
                 .replace(/[^a-z0-9]+/g, " ")
                 .trim()
     }
