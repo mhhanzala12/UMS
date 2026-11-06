@@ -1454,7 +1454,8 @@ ApplicationWindow {
                                     model: Object.keys(presets).filter(function(name) {
                                         return name.length > 0 && name.length <= 48
                                                 && name.trim() === name
-                                                && !/[<>:"/\\|?*\u0000-\u001f]/.test(name)
+                                                && name.indexOf("/") < 0 && name.indexOf("\\") < 0
+                                                && !/[<>:"|?*\u0000-\u001f]/.test(name)
                                                 && !name.endsWith(".")
                                     })
                                     currentIndex: Math.max(0, model.indexOf(presetName))
