@@ -319,7 +319,14 @@ class AppBridge(QObject):
         if self.lyrics_worker and self.lyrics_worker.isRunning():
             self._notify("A lyrics lookup is already in progress.")
             return
-        worker = LyricsSearchWorker(title, artist, self)
+        current = self.current_song if isinstance(self.current_song, dict) else {}
+        same_track = (
+            title.casefold() == str(current.get("title") or "").strip().casefold()
+            and artist.casefold() == str(current.get("artist") or "").strip().casefold()
+        )
+        album = str(current.get("album") or "") if same_track else ""
+        duration = max(0, self.player.duration() / 1000.0) if same_track else None
+        worker = LyricsSearchWorker(title, artist, self, album=album, duration=duration)
         self.lyrics_worker = worker
         worker.structuredCompleted.connect(self.lyricsReady.emit)
         worker.failed.connect(self._notify)
