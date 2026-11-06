@@ -41,7 +41,7 @@ Dialog {
             else
                 break
         }
-        activeIndex = found >= 0 ? found : 0
+        activeIndex = found
     }
 
     onPositionMsChanged: updateActiveLine()
@@ -371,8 +371,13 @@ Dialog {
                 }
                 Text {
                     Layout.alignment: Qt.AlignHCenter
-                    text: root.synchronized ? "SYNCED LYRICS" : "LYRICS · TIMING UNAVAILABLE"
-                    color: "#526044"
+                    Layout.preferredWidth: Math.min(parent.width - 24, 760)
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    text: root.synchronized ? "SYNCED LYRICS" :
+                          (root.lyrics.length > 0 && root.message.length > 0
+                           ? root.message : "LYRICS · TIMING UNAVAILABLE")
+                    color: "#68745d"
                     font.pixelSize: 8
                     font.letterSpacing: 0.6
                 }
