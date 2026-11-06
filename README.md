@@ -35,7 +35,7 @@ A local-first desktop GUI for **yt-dlp + FFmpeg**. It is designed for people who
 - Dark, minimal sidebar dashboard with Downloader, Converter, Queue, and Settings pages.
 - Simple profile selection with expandable advanced controls.
 - Sequential queue for downloads and conversions, cancellation, failed-task retry, queued-task reordering, removal, logs, and task history for the current session.
-- Custom presets saved locally.
+- Custom presets saved locally; malformed profile labels are filtered from the Download Profile menu.
 - Built-in profiles: Best Available Quality, Smallest File, Balanced Quality and Size, Mobile Compatible, Low-End Device, Social Media Share, Archive Quality, Audio Only, Lossless Audio, 3GP Legacy Mobile, MP4 Universal Compatibility, and Web Optimized.
 
 ## Requirements
@@ -163,7 +163,7 @@ The PySide6 desktop app includes a native music workspace for catalog discovery,
 
 - Search track metadata in Deezer and Apple Music catalogs.
 - Search YouTube and SoundCloud through yt-dlp's supported search extractors.
-- Look up available lyrics through LRCLIB.
+- Look up lyrics through LRCLIB, prefer timestamped LRC results, click a timed line to seek the existing player, and follow the active line with smooth scrolling and a focused full-screen lyrics view. Plain lyrics remain available when a synchronized version is not provided.
 - Paste a public Spotify track, album, or playlist URL. The app reads public Spotify embed metadata without a Spotify client ID, client secret, or user token, then searches YouTube with yt-dlp for each track and converts/tags the match with FFmpeg. No spotDL or Spotify API credentials are used. Spotify's embed structure is undocumented; playlists longer than 100 items are extended through an anonymous embed-player endpoint on a best-effort basis.
 - Music matching uses yt-dlp with its default extras and an available JavaScript runtime for current YouTube challenge handling. FFmpeg is required for MP3 extraction, metadata tagging, and artwork embedding. Mutagen is used for reading local library tags and embedded cover art.
 
