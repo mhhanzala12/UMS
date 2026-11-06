@@ -92,8 +92,27 @@ class AppBridge(QObject):
         self.player.mediaStatusChanged.connect(self._on_media_status)
         self.player.positionChanged.connect(lambda value: self.playerChanged.emit(json.dumps({"position": value})))
         self.player.durationChanged.connect(lambda value: self.playerChanged.emit(json.dumps({"duration": value})))
-        self.player.playbackStateChanged.connect(lambda value: self.playerChanged.emit(json.dumps({"state": int(value.value if hasattr(value, "value") else value)})))
+        self.player.playbackStateChanged.connect(self._on_player_state_changed)
+        # Keep lyric highlighting responsive even on backends that emit positionChanged
+        # infrequently. This polls the existing player; it never creates another session.
+        self._player_position_timer = QTimer(self)
+        self._player_position_timer.setInterval(100)
+        self._player_position_timer.timeout.connect(self._emit_player_position)
         self._emit_initial()
+
+    def _on_player_state_changed(self, state):
+        state_value = int(state.value if hasattr(state, "value") else state)
+        self.playerChanged.emit(json.dumps({"state": state_value}))
+        if state_value == QMediaPlayer.PlayingState.value:
+            if not self._player_position_timer.isActive():
+                self._player_position_timer.start()
+        else:
+            self._player_position_timer.stop()
+        self._emit_player_position()
+
+    def _emit_player_position(self):
+        if self.player.playbackState() == QMediaPlayer.PlayingState:
+            self.playerChanged.emit(json.dumps({"position": self.player.position()}))
 
     def _emit_initial(self):
         self.presetsChanged.emit(json.dumps(self.presets))
