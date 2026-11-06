@@ -1,6 +1,8 @@
 """Built-in output presets for Universal Media Studio."""
 from __future__ import annotations
 
+import unicodedata
+
 # User-defined labels are displayed directly in the Download Profile combo.
 # Reject malformed names (for example a stray "gg.") without excluding
 # readable custom labels written in non-Latin scripts.
@@ -12,8 +14,9 @@ def _valid_preset_name(name):
         and len(name) <= 48
         and name == name.strip()
         and name[0].isalnum()
-        and (name[-1].isalnum() or name[-1] == ")")
-        and all(char.isalnum() or char in " &()_.-" for char in name)
+        and (name[-1].isalnum() or unicodedata.category(name[-1]).startswith("M") or name[-1] == ")")
+        and all(char.isalnum() or unicodedata.category(char).startswith("M")
+                or char in " &()_.-" for char in name)
     )
 
 
