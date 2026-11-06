@@ -1,6 +1,13 @@
 """Launch the QML desktop interface for Universal Media Studio."""
+import os
 import sys
 from pathlib import Path
+
+# Qt Multimedia's FFmpeg backend can emit a full codec/MFT diagnostic dump when
+# QT_FFMPEG_DEBUG is inherited from a developer shell or IDE. Keep normal app
+# launches quiet, but let developers opt in explicitly for troubleshooting.
+if os.environ.get("UMS_KEEP_QT_FFMPEG_DEBUG") != "1":
+    os.environ.pop("QT_FFMPEG_DEBUG", None)
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QFont, QFontDatabase
