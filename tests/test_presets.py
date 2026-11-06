@@ -25,6 +25,9 @@ class DownloadPresetTests(unittest.TestCase):
         self.assertNotIn("gg.", profiles)
         self.assertNotIn("  Bad name", profiles)
         self.assertIn("My Custom Profile", profiles)
+        self.assertIn("বাংলা প্রোফাইল", merged_presets({
+            "বাংলা প্রোফাইল": {"container": "mp4"}
+        }))
 
     def test_built_in_presets_are_not_mutated(self):
         custom = merged_presets()
