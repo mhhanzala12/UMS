@@ -142,6 +142,7 @@ UniversalMediaStudio/
 - **Encoder not found:** your FFmpeg build may not include that encoder; choose another codec or install a build with the required encoder.
 - **MP3 attached-picture streams:** FFmpeg reports embedded album art as video streams (often PNG/JPEG). These are cover images, not playable video. UMS audio-only conversion maps only the audio stream, so the pictures are not exported as video. The Music downloader uses one cover source at a time to avoid duplicate APIC artwork frames.
 - **Media Foundation `*_mf` messages:** `av1_mf`, `hevc_mf`, and `h264_mf` are FFmpeg's Windows Media Foundation encoder wrappers. UMS Auto mode does not select these wrappers; it prefers its configured software encoders and then supported NVENC/QSV/AMF encoders. A failed MFT probe alone does not mean a conversion failed—check the FFmpeg exit code and output validation. When a selected hardware encoder fails, choose a software encoder such as `libx264`, `libx265`, or `libsvtav1`.
+- **Qt FFmpeg codec-dump messages during music playback:** Qt Multimedia can print its codec inventory on first decode when `QT_FFMPEG_DEBUG` and Qt FFmpeg logging are enabled. For normal launches, remove `QT_FFMPEG_DEBUG` from the environment; keep it enabled only when collecting a diagnostic log. Do not disable all FFmpeg logging to hide these lines, because that can also hide real decoder errors.
 - **Unsupported or protected URL:** try a source that provides accessible, non-DRM media and check the yt-dlp error in the Queue activity log.
 
 ## Development checks
