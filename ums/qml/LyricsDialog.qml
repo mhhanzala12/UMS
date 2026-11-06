@@ -9,7 +9,7 @@ Popup {
     property string artistName: ""
     property var lyrics: []
     property string message: ""
-    property bool synchronized: false
+    property bool lyricsSynchronized: false
     property real positionMs: 0
     property real durationMs: 0
     property bool playing: false
@@ -30,7 +30,7 @@ Popup {
     }
 
     function updateActiveLine() {
-        if (!synchronized || !lyrics || lyrics.length === 0) {
+        if (!lyricsSynchronized || !lyrics || lyrics.length === 0) {
             activeIndex = -1
             return
         }
@@ -46,7 +46,7 @@ Popup {
 
     onPositionMsChanged: updateActiveLine()
     onLyricsChanged: updateActiveLine()
-    onSynchronizedChanged: updateActiveLine()
+    onLyricsSynchronizedChanged: updateActiveLine()
     onOpened: {
         updateActiveLine()
         if (activeIndex >= 0 && activeIndex < lyricList.count)
@@ -174,7 +174,7 @@ Popup {
                 }
                 Text {
                     width: parent.width
-                    visible: !root.synchronized && root.lyrics.length > 0
+                    visible: !root.lyricsSynchronized && root.lyrics.length > 0
                     text: "These lyrics are not timestamped, so line seeking is unavailable."
                     color: "#66705e"
                     font.pixelSize: 11
@@ -211,7 +211,7 @@ Popup {
                     height: Math.max(44, lyricText.implicitHeight + 12)
 
                     property bool activeLine: rowIndex === root.activeIndex
-                    property bool canSeek: root.synchronized && Number(lyric.time_ms) >= 0
+                    property bool canSeek: root.lyricsSynchronized && Number(lyric.time_ms) >= 0
 
                     Rectangle {
                         width: Math.min(parent.width - 8, lyricText.width + 28)
@@ -377,7 +377,7 @@ Popup {
                     Layout.preferredWidth: Math.min(parent.width - 24, 760)
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
-                    text: root.synchronized ? "SYNCED LYRICS" :
+                    text: root.lyricsSynchronized ? "SYNCED LYRICS" :
                           (root.lyrics.length > 0 && root.message.length > 0
                            ? root.message : "LYRICS · TIMING UNAVAILABLE")
                     color: "#68745d"
