@@ -1,12 +1,21 @@
 """Built-in output presets for Universal Media Studio."""
 from __future__ import annotations
 
-import re
-
 # User-defined labels are displayed directly in the Download Profile combo.
-# Reject malformed names (for example a stray "gg.") while keeping simple,
-# readable names compatible with the built-in profile labels.
-_PRESET_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &()_-]{0,47}$")
+# Reject malformed names (for example a stray "gg.") without excluding
+# readable custom labels written in non-Latin scripts.
+
+
+def _valid_preset_name(name):
+    return (
+        bool(name)
+        and len(name) <= 48
+        and name == name.strip()
+        and name[0].isalnum()
+        and (name[-1].isalnum() or name[-1] == ")")
+        and all(char.isalnum() or char in " &()_.-" for char in name)
+    )
+
 
 PRESETS = {
     "Best Available Quality": {
@@ -90,7 +99,6 @@ def merged_presets(custom=None):
     result = {name: dict(value) for name, value in PRESETS.items()}
     if isinstance(custom, dict):
         for name, value in custom.items():
-            if (isinstance(name, str) and name == name.strip()
-                    and _PRESET_NAME.fullmatch(name) and isinstance(value, dict)):
+            if isinstance(name, str) and _valid_preset_name(name) and isinstance(value, dict):
                 result[name] = dict(value)
     return result
