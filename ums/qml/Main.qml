@@ -1287,7 +1287,7 @@ ApplicationWindow {
                                     anchors.leftMargin: 20; anchors.topMargin: 6
                                     spacing: 8
                                     Icon { name: window.kindIcon(modelData.kind); color: themeColors.muted; implicitWidth: 13; implicitHeight: 13 }
-                                    Text { text: modelData.kind; color: themeColors.muted; font.pixelSize: 11; font.weight: Font.DemiBold }
+                                    Text { text: modelData.kind || ""; color: themeColors.muted; font.pixelSize: 11; font.weight: Font.DemiBold }
                                 }
                                 // result row
                                 Item {
