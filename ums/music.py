@@ -167,7 +167,10 @@ def search_catalog(query: str, provider: str = "All", limit: int = 20, kind: str
 
 
 class LyricsSearchWorker(QThread):
+    # Keep completed as plain text for the legacy Widgets UI. The QML player
+    # consumes structuredCompleted so it can synchronize timestamped rows.
     completed = Signal(str)
+    structuredCompleted = Signal(str)
     failed = Signal(str)
 
     def __init__(self, title: str, artist: str, parent=None):
@@ -212,7 +215,11 @@ class LyricsSearchWorker(QThread):
                     "lines": lines,
                     "message": "" if lines else "No lyrics text was returned.",
                 }
-            self.completed.emit(json.dumps(payload, ensure_ascii=False))
+            display_text = "\\n".join(line["text"] for line in payload["lines"])
+            if not display_text:
+                display_text = payload["message"] or "No lyrics found for this track."
+            self.completed.emit(display_text)
+            self.structuredCompleted.emit(json.dumps(payload, ensure_ascii=False))
         except Exception as exc:
             self.failed.emit(f"Lyrics lookup failed: {exc}")
 
