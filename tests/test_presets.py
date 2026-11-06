@@ -1,7 +1,7 @@
 """Tests for built-in download profiles and custom label validation."""
 import unittest
 
-from ums.presets import PRESETS, merged_presets
+from ums.presets import DOWNLOAD_PROFILE_NAMES, PRESETS, merged_presets
 
 
 class DownloadPresetTests(unittest.TestCase):
@@ -28,6 +28,15 @@ class DownloadPresetTests(unittest.TestCase):
         self.assertIn("বাংলা প্রোফাইল", merged_presets({
             "বাংলা প্রোফাইল": {"container": "mp4"}
         }))
+
+    def test_download_profile_list_contains_only_requested_profiles(self):
+        self.assertEqual(DOWNLOAD_PROFILE_NAMES, (
+            "Best Available Quality",
+            "Audio Only",
+            "Lossless Audio",
+            "3GP Legacy Mobile",
+            "MP4 Universal Compatibility",
+        ))
 
     def test_built_in_presets_are_not_mutated(self):
         custom = merged_presets()
