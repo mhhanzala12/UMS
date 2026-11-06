@@ -9,6 +9,7 @@ Popup {
     property string artistName: ""
     property var lyrics: []
     property string message: ""
+    property string source: ""
     property bool lyricsSynchronized: false
     property real positionMs: 0
     property real durationMs: 0
@@ -377,9 +378,10 @@ Popup {
                     Layout.preferredWidth: Math.min(parent.width - 24, 760)
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
-                    text: root.lyricsSynchronized ? "SYNCED LYRICS" :
-                          (root.lyrics.length > 0 && root.message.length > 0
-                           ? root.message : "LYRICS · TIMING UNAVAILABLE")
+                    text: root.lyricsSynchronized
+                          ? "SYNCED LYRICS" + (root.source.length > 0 ? " · " + root.source.toUpperCase() : "")
+                          : (root.lyrics.length > 0 && root.message.length > 0
+                             ? root.message : "LYRICS · TIMING UNAVAILABLE")
                     color: "#68745d"
                     font.pixelSize: 8
                     font.letterSpacing: 0.6
