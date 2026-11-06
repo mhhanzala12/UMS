@@ -1457,7 +1457,7 @@ ApplicationWindow {
                                                 && name.indexOf("/") < 0 && name.indexOf("\\") < 0
                                                 && !/[<>:"|?*\u0000-\u001f]/.test(name)
                                                 && !name.endsWith(".")
-                                    })
+                                    });
                                     currentIndex: Math.max(0, model.indexOf(presetName))
                                     onActivated: presetName = currentText
                                     background: Rectangle { radius: 7; color: themeColors.panel2; border.color: themeColors.border }
