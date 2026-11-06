@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Dialog {
+Popup {
     id: root
 
     property string songTitle: ""
@@ -49,12 +49,18 @@ Dialog {
     onSynchronizedChanged: updateActiveLine()
     onOpened: {
         updateActiveLine()
-        if (activeIndex >= 0)
-            Qt.callLater(function() { lyricList.positionViewAtIndex(activeIndex, ListView.Center) })
+        if (activeIndex >= 0 && activeIndex < lyricList.count)
+            Qt.callLater(function() {
+                if (activeIndex >= 0 && activeIndex < lyricList.count)
+                    lyricList.positionViewAtIndex(activeIndex, ListView.Center)
+            })
     }
     onActiveIndexChanged: {
-        if (visible && activeIndex >= 0)
-            Qt.callLater(function() { lyricList.positionViewAtIndex(activeIndex, ListView.Center) })
+        if (visible && activeIndex >= 0 && activeIndex < lyricList.count)
+            Qt.callLater(function() {
+                if (activeIndex >= 0 && activeIndex < lyricList.count)
+                    lyricList.positionViewAtIndex(activeIndex, ListView.Center)
+            })
     }
 
     modal: true
@@ -64,7 +70,6 @@ Dialog {
     width: parent ? parent.width : 1440
     height: parent ? parent.height : 900
     padding: 0
-    margins: 0
     closePolicy: Popup.CloseOnEscape
 
     background: Rectangle {
@@ -185,10 +190,9 @@ Dialog {
                 currentIndex: root.activeIndex
                 spacing: 6
                 boundsBehavior: Flickable.StopAtBounds
-                keyNavigationEnabled: false
                 highlightFollowsCurrentItem: true
                 highlightMoveDuration: 260
-                highlightRangeMode: ListView.StrictlyEnforceRange
+                highlightRangeMode: ListView.ApplyRange
                 preferredHighlightBegin: height * 0.42
                 preferredHighlightEnd: height * 0.58
 
@@ -201,13 +205,13 @@ Dialog {
 
                 delegate: Item {
                     id: lyricDelegate
-                    required property var modelData
-                    required property int index
+                    property var lyric: modelData
+                    property int rowIndex: index
                     width: lyricList.width
                     height: Math.max(44, lyricText.implicitHeight + 12)
 
-                    property bool activeLine: index === root.activeIndex
-                    property bool canSeek: root.synchronized && Number(modelData.time_ms) >= 0
+                    property bool activeLine: rowIndex === root.activeIndex
+                    property bool canSeek: root.synchronized && Number(lyric.time_ms) >= 0
 
                     Rectangle {
                         width: Math.min(parent.width - 8, lyricText.width + 28)
@@ -222,7 +226,7 @@ Dialog {
                         id: lyricText
                         width: Math.max(80, Math.min(parent.width - 48, 760))
                         anchors.centerIn: parent
-                        text: modelData.text || ""
+                        text: lyricDelegate.lyric.text || ""
                         font.family: "Inter"
                         color: lyricDelegate.activeLine ? root.accentColor : "#899282"
                         opacity: lyricDelegate.activeLine ? 1 : 0.66
@@ -234,7 +238,6 @@ Dialog {
                         elide: Text.ElideNone
                         Behavior on opacity { NumberAnimation { duration: 180 } }
                         Behavior on color { ColorAnimation { duration: 180 } }
-                        Behavior on font.pixelSize { NumberAnimation { duration: 180 } }
                     }
 
                     MouseArea {
@@ -244,7 +247,7 @@ Dialog {
                         cursorShape: lyricDelegate.canSeek ? Qt.PointingHandCursor : Qt.ArrowCursor
                         onClicked: {
                             if (lyricDelegate.canSeek)
-                                root.seekRequested(Number(modelData.time_ms))
+                                root.seekRequested(Number(lyricDelegate.lyric.time_ms))
                         }
                     }
                 }
