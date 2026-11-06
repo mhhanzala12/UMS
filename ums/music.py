@@ -415,15 +415,25 @@ class LyricsSearchWorker(QThread):
 
             synced = [item for item in candidates if item["synchronized"]]
             plain = [item for item in candidates if not item["synchronized"]]
-            selected = max(
-                synced or plain,
-                key=lambda item: (
-                    item["match_score"],
-                    item["quality"],
-                    item["preferred"],
-                ),
+            best_synced = max(
+                synced,
+                key=lambda item: (item["match_score"], item["quality"], item["preferred"]),
                 default=None,
             )
+            best_plain = max(
+                plain,
+                key=lambda item: (item["match_score"], item["preferred"]),
+                default=None,
+            )
+            # Do not sacrifice a clearly better recording match just to get
+            # timestamps. Prefer sync when its metadata match is comparable.
+            if best_synced and (
+                best_plain is None
+                or best_synced["match_score"] >= best_plain["match_score"] - 0.10
+            ):
+                selected = best_synced
+            else:
+                selected = best_plain
             if selected is None:
                 unavailable = len(errors) == len(providers)
                 message = (
