@@ -2384,7 +2384,7 @@ ApplicationWindow {
         artistName: lyricsArtist || playerArtist
         lyrics: lyricsLines
         message: lyricsMessage
-        synchronized: lyricsSynchronized
+        lyricsSynchronized: lyricsSynchronized
         positionMs: playerPosition
         durationMs: playerDuration
         playing: playerPlaying
