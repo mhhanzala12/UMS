@@ -614,27 +614,53 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
                        if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS and p.stat().st_mtime_ns >= started_ns - 2_000_000_000)
     if not files:
         raise RuntimeError("yt-dlp completed without producing an audio file. Check FFmpeg and the selected source.")
-    if metadata:
-        try:
-            from mutagen.id3 import ID3, APIC, TALB, TIT2, TPE1
-            title = str(metadata.get("title") or "")
-            artist = str(metadata.get("artist") or "")
-            album = str(metadata.get("album") or "")
-            for file_path in files:
-                try:
-                    tags = ID3(file_path)
-                except Exception:
-                    tags = ID3()
-                if title: tags.add(TIT2(encoding=3, text=title))
-                if artist: tags.add(TPE1(encoding=3, text=artist))
-                if album: tags.add(TALB(encoding=3, text=album))
-                if image_data:
-                    # Replace inherited APIC frames so the file has one front cover.
-                    tags.delall("APIC")
-                    tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=image_data))
+    # Normalize ID3 metadata on every generated MP3, even when no catalog
+    # metadata was supplied. Some sources already contain cover art and yt-dlp
+    # may add a thumbnail too; retain one front-cover APIC frame at most.
+    try:
+        from mutagen.id3 import ID3, APIC, TALB, TIT2, TPE1
+        tag_data = metadata or {}
+        title = str(tag_data.get("title") or "")
+        artist = str(tag_data.get("artist") or "")
+        album = str(tag_data.get("album") or "")
+        deduplicated = 0
+        for file_path in files:
+            try:
+                tags = ID3(file_path)
+            except Exception:
+                tags = ID3()
+            changed = False
+            if title:
+                tags.setall("TIT2", [TIT2(encoding=3, text=title)])
+                changed = True
+            if artist:
+                tags.setall("TPE1", [TPE1(encoding=3, text=artist)])
+                changed = True
+            if album:
+                tags.setall("TALB", [TALB(encoding=3, text=album)])
+                changed = True
+
+            pictures = tags.getall("APIC")
+            if image_data:
+                # Catalog art is authoritative: replace all inherited pictures.
+                tags.delall("APIC")
+                tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=image_data))
+                changed = True
+            elif len(pictures) > 1:
+                # Otherwise preserve the existing front cover (or first image)
+                # and discard duplicate attached pictures.
+                keep = next((picture for picture in pictures if picture.type == 3), pictures[0])
+                tags.delall("APIC")
+                tags.add(keep)
+                changed = True
+                deduplicated += len(pictures) - 1
+            if changed:
                 tags.save(file_path)
-        except Exception as tag_error:
-            if log_cb: log_cb(f"Spotify tags could not be applied; keeping yt-dlp metadata: {tag_error}")
+        if deduplicated and log_cb:
+            log_cb(f"Removed {deduplicated} duplicate embedded cover image(s).")
+    except Exception as tag_error:
+        if log_cb:
+            log_cb(f"Audio tags could not be normalized; keeping the downloaded MP3: {tag_error}")
     if log_cb:
         log_cb("Saved tagged audio: " + ", ".join(Path(path).name for path in files))
     if progress_cb:
