@@ -20,6 +20,7 @@ from urllib.request import Request, url2pathname, urlopen
 from PySide6.QtCore import QThread, Signal
 
 from .config import APP_DIR, atomic_write_text, load_settings, update_settings
+from .lyrics import parse_lrc
 from .engine import CancelledError, network_options
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".aiff", ".wma"}
@@ -171,8 +172,8 @@ class LyricsSearchWorker(QThread):
 
     def __init__(self, title: str, artist: str, parent=None):
         super().__init__(parent)
-        self.title = title
-        self.artist = artist
+        self.title = str(title or "").strip()
+        self.artist = str(artist or "").strip()
 
     def run(self):
         try:
@@ -180,12 +181,34 @@ class LyricsSearchWorker(QThread):
             request = Request("https://lrclib.net/api/search?" + params, headers={"User-Agent": "UniversalMediaStudio/1.0"})
             with urlopen(request, timeout=12) as response:
                 rows = json.loads(response.read().decode("utf-8"))
-            if not rows:
-                self.completed.emit("No lyrics found for this track.")
-                return
-            row = next((item for item in rows if item.get("plainLyrics") or item.get("syncedLyrics")), rows[0])
-            lyrics = row.get("plainLyrics") or row.get("syncedLyrics") or "No lyrics text was returned."
-            self.completed.emit(lyrics)
+            row = next((item for item in rows if item.get("syncedLyrics")), None)
+            if row is None:
+                row = next((item for item in rows if item.get("plainLyrics")), None)
+            if row is None:
+                payload = {
+                    "title": self.title,
+                    "artist": self.artist,
+                    "synchronized": False,
+                    "lines": [],
+                    "message": "No lyrics found for this track.",
+                }
+            else:
+                synced = str(row.get("syncedLyrics") or "")
+                plain = str(row.get("plainLyrics") or "")
+                lines = parse_lrc(synced)
+                synchronized = bool(lines)
+                if not lines:
+                    lines = [{"time_ms": -1, "text": line.strip()}
+                             for line in plain.splitlines() if line.strip()]
+                payload = {
+                    "title": row.get("trackName") or self.title,
+                    "artist": row.get("artistName") or self.artist,
+                    "duration": row.get("duration"),
+                    "synchronized": synchronized,
+                    "lines": lines,
+                    "message": "" if lines else "No lyrics text was returned.",
+                }
+            self.completed.emit(json.dumps(payload, ensure_ascii=False))
         except Exception as exc:
             self.failed.emit(f"Lyrics lookup failed: {exc}")
 
