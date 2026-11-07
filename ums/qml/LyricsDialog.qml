@@ -74,7 +74,7 @@ Popup {
     closePolicy: Popup.CloseOnEscape
 
     background: Rectangle {
-        color: "#090c09"
+        color: "#080b08"
         opacity: 0.985
     }
 
@@ -84,7 +84,7 @@ Popup {
         // Minimal top bar: close/back action, track identity, and a compact lyrics mark.
         Item {
             Layout.fillWidth: true
-            Layout.preferredHeight: 66
+            Layout.preferredHeight: 72
 
             Rectangle {
                 anchors.left: parent.left
@@ -118,8 +118,8 @@ Popup {
                     text: root.songTitle || "Now playing"
                     color: "#f0f2ed"
                     font.family: "Inter"
-                    font.pixelSize: 13
-                    font.weight: Font.DemiBold
+                    font.pixelSize: 14
+                    font.weight: Font.Bold
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight
                 }
@@ -128,7 +128,7 @@ Popup {
                     text: root.artistName
                     color: "#77816e"
                     font.family: "Inter"
-                    font.pixelSize: 10
+                    font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight
                 }
@@ -189,17 +189,17 @@ Popup {
                 clip: true
                 model: root.lyrics
                 currentIndex: root.activeIndex
-                spacing: 6
+                spacing: 9
                 boundsBehavior: Flickable.StopAtBounds
                 highlightFollowsCurrentItem: true
-                highlightMoveDuration: 260
+                highlightMoveDuration: 320
                 highlightRangeMode: ListView.ApplyRange
                 preferredHighlightBegin: height * 0.42
                 preferredHighlightEnd: height * 0.58
 
                 Behavior on contentY {
                     NumberAnimation {
-                        duration: 280
+                        duration: 320
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -209,7 +209,7 @@ Popup {
                     property var lyric: modelData
                     property int rowIndex: index
                     width: lyricList.width
-                    height: Math.max(44, lyricText.implicitHeight + 12)
+                    height: Math.max(54, lyricText.implicitHeight + 16)
 
                     property bool activeLine: rowIndex === root.activeIndex
                     property bool canSeek: root.lyricsSynchronized && Number(lyric.time_ms) >= 0
@@ -225,14 +225,15 @@ Popup {
 
                     Text {
                         id: lyricText
-                        width: Math.max(80, Math.min(parent.width - 48, 760))
+                        width: Math.max(80, Math.min(parent.width - 48, 880))
                         anchors.centerIn: parent
                         text: lyricDelegate.lyric.text || ""
                         font.family: "Inter"
-                        color: lyricDelegate.activeLine ? root.accentColor : "#899282"
-                        opacity: lyricDelegate.activeLine ? 1 : 0.66
-                        font.pixelSize: lyricDelegate.activeLine ? 20 : 15
-                        font.weight: lyricDelegate.activeLine ? Font.Bold : Font.Medium
+                        color: lyricDelegate.activeLine ? "#caff4b" : "#929b8a"
+                        opacity: lyricDelegate.activeLine ? 1 : 0.82
+                        font.pixelSize: lyricDelegate.activeLine ? 22 : 16
+                        font.weight: lyricDelegate.activeLine ? Font.Bold : Font.DemiBold
+                        font.letterSpacing: lyricDelegate.activeLine ? 0.05 : 0.0
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                         wrapMode: Text.WordWrap
@@ -269,8 +270,8 @@ Popup {
         // One shared player transport; all actions target AppBridge's existing player.
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 106
-            color: "#0b0e0b"
+            Layout.preferredHeight: 110
+            color: "#090c09"
             border.color: "#141a12"
             border.width: 1
 
@@ -344,15 +345,15 @@ Popup {
                         }
                     }
                     Rectangle {
-                        width: 38
-                        height: 38
+                        width: 40
+                        height: 40
                         radius: 19
                         color: root.accentColor
                         Text {
                             anchors.centerIn: parent
                             text: root.playing ? "Ⅱ" : "▶"
                             color: "#17200b"
-                            font.pixelSize: 17
+                            font.pixelSize: 18
                             font.weight: Font.Bold
                         }
                         MouseArea {
