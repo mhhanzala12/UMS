@@ -117,7 +117,7 @@ Popup {
                     width: parent.width
                     text: root.songTitle || "Now playing"
                     color: "#f0f2ed"
-                    font.family: "Inter"
+                    font.family: "Segoe UI"
                     font.pixelSize: 14
                     font.weight: Font.Bold
                     horizontalAlignment: Text.AlignHCenter
@@ -127,7 +127,7 @@ Popup {
                     width: parent.width
                     text: root.artistName
                     color: "#77816e"
-                    font.family: "Inter"
+                    font.family: "Segoe UI"
                     font.pixelSize: 11
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight
@@ -228,7 +228,7 @@ Popup {
                         width: Math.max(80, Math.min(parent.width - 48, 880))
                         anchors.centerIn: parent
                         text: lyricDelegate.lyric.text || ""
-                        font.family: "Inter"
+                        font.family: "Segoe UI"
                         color: lyricDelegate.activeLine ? "#caff4b" : "#929b8a"
                         opacity: lyricDelegate.activeLine ? 1 : 0.82
                         font.pixelSize: lyricDelegate.activeLine ? 22 : 16
@@ -291,7 +291,7 @@ Popup {
                         text: root.formatTime(root.positionMs)
                         color: "#7d8873"
                         font.pixelSize: 9
-                        font.family: "Inter"
+                        font.family: "Segoe UI"
                     }
                     Slider {
                         id: seekSlider
