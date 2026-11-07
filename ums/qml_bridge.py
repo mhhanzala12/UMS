@@ -414,6 +414,7 @@ class AppBridge(QObject):
             logs = task.setdefault("logs", [])
             logs.append("Lyrics sidecar lookup failed: " + str(message))
             task["logs"] = logs[-80:]
+            self._emit_queue_soon()
 
     def _on_downloaded_lyrics_finished(self, worker, job: dict) -> None:
         if self._lyrics_download_worker is worker:
