@@ -20,7 +20,7 @@ from urllib.request import Request, url2pathname, urlopen
 from PySide6.QtCore import QThread, Signal
 
 from .config import APP_DIR, atomic_write_text, load_settings, update_settings
-from .lyrics import lyric_match_score, parse_lrc, parse_ttml
+from .lyrics import format_lrc, lyric_match_score, parse_lrc, parse_ttml
 from .engine import CancelledError, network_options
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".aac", ".ogg", ".opus", ".flac", ".wav", ".aiff", ".wma"}
@@ -379,7 +379,10 @@ class LyricsSearchWorker(QThread):
     structuredCompleted = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, title: str, artist: str, parent=None, album: str = "", duration: float | None = None):
+    def __init__(
+        self, title: str, artist: str, parent=None, album: str = "",
+        duration: float | None = None, sidecar_path: str | Path | None = None,
+    ):
         super().__init__(parent)
         self.title = str(title or "").strip()
         self.artist = str(artist or "").strip()
@@ -388,6 +391,7 @@ class LyricsSearchWorker(QThread):
             self.duration = float(duration or 0) or None
         except (TypeError, ValueError):
             self.duration = None
+        self.sidecar_path = Path(sidecar_path).expanduser() if sidecar_path else None
 
     def run(self):
         providers = [
@@ -467,6 +471,22 @@ class LyricsSearchWorker(QThread):
                     "message": "" if selected["synchronized"] else "These lyrics are not timestamped.",
                     "providers_checked": [name for name, _fetch in providers],
                 }
+            if self.sidecar_path and payload.get("synchronized") and payload.get("lines"):
+                try:
+                    if not self.sidecar_path.exists():
+                        lrc_text = format_lrc(
+                            payload["lines"],
+                            title=payload.get("title") or self.title,
+                            artist=payload.get("artist") or self.artist,
+                            album=self.album,
+                        )
+                        if lrc_text:
+                            atomic_write_text(self.sidecar_path, lrc_text)
+                    if self.sidecar_path.is_file():
+                        payload["local_path"] = str(self.sidecar_path)
+                except OSError as exc:
+                    payload["sidecar_error"] = str(exc)
+
             display_text = "\n".join(line["text"] for line in payload["lines"])
             if not display_text:
                 display_text = payload["message"] or "No lyrics found for this track."
