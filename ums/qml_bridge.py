@@ -315,6 +315,113 @@ class AppBridge(QObject):
             self._new_task("music", query, query=query,
                            music_track={"title": str(title), "artist": str(artist), "cover": str(cover)})
 
+    def _queue_music_lyrics(self, task: dict, outputs: list[str]) -> None:
+        """Queue one synchronized LRC lookup for each newly downloaded audio file."""
+        if not self.settings.get("download_lyrics", True):
+            return
+        metadata = task.get("music_track") if isinstance(task.get("music_track"), dict) else {}
+        fallback_query = str(task.get("query") or task.get("name") or "").strip()
+        title = str(metadata.get("title") or "").strip()
+        artist = str(metadata.get("artist") or "").strip()
+        if not title and " - " in fallback_query:
+            artist, title = [part.strip() for part in fallback_query.split(" - ", 1)]
+        elif not title:
+            title = fallback_query
+        album = str(metadata.get("album") or "").strip()
+        try:
+            duration = float(metadata.get("duration") or 0) or None
+        except (TypeError, ValueError):
+            duration = None
+
+        for output in outputs or []:
+            audio_path = Path(str(output)).expanduser()
+            if audio_path.suffix.lower() not in AUDIO_EXTENSIONS or not audio_path.is_file():
+                continue
+            sidecar = audio_path.with_suffix(".lrc")
+            if sidecar.exists():
+                continue
+            key = str(audio_path.resolve()).casefold()
+            if key in self._lyrics_download_paths:
+                continue
+            self._lyrics_download_paths.add(key)
+            self._lyrics_download_queue.append({
+                "task_id": task.get("id"),
+                "title": title or audio_path.stem,
+                "artist": artist,
+                "album": album,
+                "duration": duration,
+                "audio_path": str(audio_path),
+                "sidecar_path": str(sidecar),
+            })
+        self._process_next_lyrics_download()
+
+    def _process_next_lyrics_download(self) -> None:
+        if self._lyrics_download_worker is not None:
+            return
+        while self._lyrics_download_queue and not self.settings.get("download_lyrics", True):
+            job = self._lyrics_download_queue.pop(0)
+            self._lyrics_download_paths.discard(str(Path(job["audio_path"]).resolve()).casefold())
+        if not self._lyrics_download_queue:
+            return
+        job = self._lyrics_download_queue.pop(0)
+        sidecar = Path(job["sidecar_path"])
+        if sidecar.exists():
+            self._lyrics_download_paths.discard(str(Path(job["audio_path"]).resolve()).casefold())
+            self._process_next_lyrics_download()
+            return
+        worker = LyricsSearchWorker(
+            job["title"],
+            job["artist"],
+            self,
+            album=job["album"],
+            duration=job["duration"],
+            sidecar_path=sidecar,
+        )
+        self._lyrics_download_worker = worker
+        worker.structuredCompleted.connect(
+            lambda payload, job=job: self._on_downloaded_lyrics_ready(job, payload)
+        )
+        worker.failed.connect(
+            lambda message, job=job: self._on_downloaded_lyrics_failed(job, message)
+        )
+        worker.finished.connect(
+            lambda worker=worker, job=job: self._on_downloaded_lyrics_finished(worker, job)
+        )
+        worker.start()
+
+    def _on_downloaded_lyrics_ready(self, job: dict, payload_text: str) -> None:
+        try:
+            payload = json.loads(payload_text)
+        except (TypeError, json.JSONDecodeError):
+            return
+        local_path = str(payload.get("local_path") or "")
+        task = self._find_task(str(job.get("task_id") or ""))
+        if task:
+            logs = task.setdefault("logs", [])
+            if local_path and Path(local_path).is_file():
+                logs.append(f"Saved synchronized lyrics: {Path(local_path).name}")
+                task["detail"] = (task.get("detail") or "Music download complete") + " · LRC saved"
+            elif payload.get("synchronized"):
+                logs.append("Synchronized lyrics were found, but the LRC sidecar could not be written.")
+            else:
+                logs.append("No synchronized lyrics were available to save as an LRC file.")
+            task["logs"] = logs[-80:]
+            self._emit_queue_soon()
+
+    def _on_downloaded_lyrics_failed(self, job: dict, message: str) -> None:
+        task = self._find_task(str(job.get("task_id") or ""))
+        if task:
+            logs = task.setdefault("logs", [])
+            logs.append("Lyrics sidecar lookup failed: " + str(message))
+            task["logs"] = logs[-80:]
+
+    def _on_downloaded_lyrics_finished(self, worker, job: dict) -> None:
+        if self._lyrics_download_worker is worker:
+            self._lyrics_download_worker = None
+        self._lyrics_download_paths.discard(str(Path(job["audio_path"]).resolve()).casefold())
+        worker.deleteLater()
+        self._process_next_lyrics_download()
+
     @Slot(str, str)
     def findLyrics(self, title, artist):
         title = str(title or "").strip()
@@ -334,7 +441,38 @@ class AppBridge(QObject):
         current_path = str(current.get("path") or "")
         is_preview_url = current_path.startswith(("http://", "https://"))
         duration = max(0, self.player.duration() / 1000.0) if same_track and not is_preview_url else None
-        worker = LyricsSearchWorker(title, artist, self, album=album, duration=duration)
+        local_audio = Path(current_path).expanduser() if same_track and current_path and not is_preview_url else None
+        if local_audio and local_audio.is_file():
+            local_lrc = local_audio.with_suffix(".lrc")
+            if local_lrc.is_file():
+                try:
+                    local_lines = parse_lrc(local_lrc.read_text(encoding="utf-8-sig"))
+                except (OSError, UnicodeError):
+                    local_lines = []
+                if local_lines:
+                    self.lyricsReady.emit(json.dumps({
+                        "title": title,
+                        "artist": artist,
+                        "request_title": title,
+                        "request_artist": artist,
+                        "duration": duration,
+                        "synchronized": True,
+                        "source": "LOCAL .LRC",
+                        "sync_level": "line",
+                        "lines": local_lines,
+                        "message": "",
+                        "local_path": str(local_lrc),
+                    }, ensure_ascii=False))
+                    return
+        sidecar_path = (
+            local_audio.with_suffix(".lrc")
+            if local_audio and local_audio.is_file()
+            and self.settings.get("download_lyrics", True)
+            else None
+        )
+        worker = LyricsSearchWorker(
+            title, artist, self, album=album, duration=duration, sidecar_path=sidecar_path
+        )
         self.lyrics_worker = worker
         worker.structuredCompleted.connect(self.lyricsReady.emit)
         worker.failed.connect(self._notify)
@@ -464,6 +602,7 @@ class AppBridge(QObject):
                         output="; ".join(str(path) for path in outputs[:2]))
         self.queueChanged.emit()
         if status == "Completed" and task and task.get("kind") == "music":
+            self._queue_music_lyrics(task, outputs)
             self.refreshLibrary()
         if status == "Failed":
             self._notify(error)
