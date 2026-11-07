@@ -1,7 +1,7 @@
 """Tests for synchronized lyric timestamp parsing."""
 import unittest
 
-from ums.lyrics import lyric_match_score, parse_lrc, parse_ttml
+from ums.lyrics import format_lrc, lyric_match_score, parse_lrc, parse_ttml
 
 
 class ParseLrcTests(unittest.TestCase):
@@ -47,6 +47,29 @@ class ParseLrcTests(unittest.TestCase):
     def test_ttml_ignores_invalid_xml_and_untimed_lines(self):
         self.assertEqual(parse_ttml("<tt><p>Untimed</p></tt>"), [])
         self.assertEqual(parse_ttml("<tt>"), [])
+
+    def test_formats_timestamped_lines_as_lrc_with_metadata(self):
+        source = format_lrc(
+            [
+                {"time_ms": 1250, "text": "First line"},
+                {"time_ms": 62345, "text": "Second line"},
+                {"time_ms": -1, "text": "Untimed text"},
+            ],
+            title="Song",
+            artist="Artist",
+            album="Album",
+        )
+        self.assertEqual(source, (
+            "[ti:Song]\n[ar:Artist]\n[al:Album]\n"
+            "[00:01.25]First line\n[01:02.35]Second line\n"
+        ))
+        self.assertEqual(parse_lrc(source), [
+            {"time_ms": 1250, "text": "First line"},
+            {"time_ms": 62350, "text": "Second line"},
+        ])
+
+    def test_lrc_formatter_returns_empty_for_plain_lyrics(self):
+        self.assertEqual(format_lrc([{"time_ms": -1, "text": "Plain lyric"}]), "")
 
     def test_match_score_preserves_non_latin_track_metadata(self):
         score = lyric_match_score(
