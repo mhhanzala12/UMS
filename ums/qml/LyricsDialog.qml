@@ -189,7 +189,7 @@ Popup {
                 clip: true
                 model: root.lyrics
                 currentIndex: root.activeIndex
-                spacing: 9
+                spacing: 3
                 boundsBehavior: Flickable.StopAtBounds
                 highlightFollowsCurrentItem: true
                 highlightMoveDuration: 320
@@ -209,7 +209,7 @@ Popup {
                     property var lyric: modelData
                     property int rowIndex: index
                     width: lyricList.width
-                    height: Math.max(54, lyricText.implicitHeight + 16)
+                    height: Math.max(42, lyricText.implicitHeight + 10)
 
                     property bool activeLine: rowIndex === root.activeIndex
                     property bool canSeek: root.lyricsSynchronized && Number(lyric.time_ms) >= 0
@@ -347,7 +347,7 @@ Popup {
                     Rectangle {
                         width: 40
                         height: 40
-                        radius: 19
+                        radius: 20
                         color: root.accentColor
                         Text {
                             anchors.centerIn: parent
