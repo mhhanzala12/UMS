@@ -210,12 +210,15 @@ def format_lrc(
         if not isinstance(row, dict):
             continue
         try:
-            centiseconds = max(0, int(round(float(row.get("time_ms", -1)) / 10)))
+            milliseconds = int(float(row.get("time_ms", -1)))
         except (TypeError, ValueError, OverflowError):
             continue
-        text = re.sub(r"[\r\n]+", " ", str(row.get("text") or "")).strip()
-        if not text or int(row.get("time_ms", -1)) < 0:
+        if milliseconds < 0:
             continue
+        text = re.sub(r"[\r\n]+", " ", str(row.get("text") or "")).strip()
+        if not text:
+            continue
+        centiseconds = int(round(milliseconds / 10))
         minutes, remainder = divmod(centiseconds, 6000)
         seconds, fraction = divmod(remainder, 100)
         timed_rows.append(f"[{minutes:02d}:{seconds:02d}.{fraction:02d}]{text}")
