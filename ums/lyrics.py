@@ -218,7 +218,7 @@ def format_lrc(
         text = re.sub(r"[\r\n]+", " ", str(row.get("text") or "")).strip()
         if not text:
             continue
-        centiseconds = int(round(milliseconds / 10))
+        centiseconds = (milliseconds + 5) // 10
         minutes, remainder = divmod(centiseconds, 6000)
         seconds, fraction = divmod(remainder, 100)
         timed_rows.append(f"[{minutes:02d}:{seconds:02d}.{fraction:02d}]{text}")
