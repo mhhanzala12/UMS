@@ -2254,6 +2254,19 @@ ApplicationWindow {
                     }
 
                     SettingsCard {
+                        icon: "file-text"
+                        title: "Download synchronized lyrics"
+                        description: "Automatically fetch timestamped lyrics after music downloads and save them next to the audio as .LRC. Local LRC files are used first when you open the lyrics view."
+                        trailing: Segmented {
+                            options: ["On", "Off"]
+                            current: settingsData.download_lyrics === false ? "Off" : "On"
+                            onPicked: function(value) {
+                                bridge.setSetting("download_lyrics", value === "On" ? "true" : "false")
+                            }
+                        }
+                    }
+
+                    SettingsCard {
                         icon: "sun"
                         title: "Appearance"
                         description: "Choose how Universal Media Studio looks."
