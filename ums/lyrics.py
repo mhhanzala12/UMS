@@ -190,3 +190,36 @@ def lyric_match_score(
         elif difference > 15:
             score -= 0.08
     return max(0.0, min(1.0, score))
+
+
+def format_lrc(
+    lines: list[dict],
+    title: str = "",
+    artist: str = "",
+    album: str = "",
+) -> str:
+    """Serialize timestamped lyric rows as a portable UTF-8 LRC sidecar."""
+    headers = []
+    for tag, value in (("ti", title), ("ar", artist), ("al", album)):
+        clean = re.sub(r"[\r\n\]]+", " ", str(value or "")).strip()
+        if clean:
+            headers.append(f"[{tag}:{clean}]")
+
+    timed_rows = []
+    for row in lines or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            centiseconds = max(0, int(round(float(row.get("time_ms", -1)) / 10)))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        text = re.sub(r"[\r\n]+", " ", str(row.get("text") or "")).strip()
+        if not text or int(row.get("time_ms", -1)) < 0:
+            continue
+        minutes, remainder = divmod(centiseconds, 6000)
+        seconds, fraction = divmod(remainder, 100)
+        timed_rows.append(f"[{minutes:02d}:{seconds:02d}.{fraction:02d}]{text}")
+
+    if not timed_rows:
+        return ""
+    return "\n".join(headers + timed_rows) + "\n"
