@@ -20,9 +20,11 @@ from PySide6.QtWidgets import QFileDialog
 
 from .config import load_settings, save_settings
 from .engine import tool_status
+from .lyrics import parse_lrc
 from .music import (
-    CatalogSearchWorker, CollectionWorker, LyricsSearchWorker, SpotifyResolveWorker,
-    PLAYLISTS_KEY, load_music_playlists, save_music_playlists, scan_audio_library,
+    AUDIO_EXTENSIONS, CatalogSearchWorker, CollectionWorker, LyricsSearchWorker,
+    SpotifyResolveWorker, PLAYLISTS_KEY, load_music_playlists, save_music_playlists,
+    scan_audio_library,
 )
 from .presets import merged_presets
 from .workers import AnalyzeWorker, FunctionWorker, MediaTaskWorker
@@ -61,6 +63,9 @@ class AppBridge(QObject):
         self.search_worker = None
         self.spotify_worker = None
         self.lyrics_worker = None
+        self._lyrics_download_queue: list[dict] = []
+        self._lyrics_download_worker = None
+        self._lyrics_download_paths: set[str] = set()
         self.collection_worker = None
         self.library = []
         self._library_loaded = False
@@ -128,6 +133,7 @@ class AppBridge(QObject):
             "max_retries": self.settings.get("max_retries", 3),
             "fragment_concurrency": self.settings.get("fragment_concurrency", 4),
             "write_automatic_subtitles": self.settings.get("write_automatic_subtitles", False),
+            "download_lyrics": bool(self.settings.get("download_lyrics", True)),
             "subtitle_languages": self.settings.get("subtitle_languages", ["all"]),
             "ffmpeg_path": self.settings.get("ffmpeg_path", ""),
             "ffprobe_path": self.settings.get("ffprobe_path", ""),
@@ -757,11 +763,17 @@ class AppBridge(QObject):
 
     @Slot(str, str)
     def setSetting(self, key, value):
-        allowed = {"output_dir", "theme", "ffmpeg_path", "ffprobe_path", "connection_mode", "proxy_url", "cookies_browser", "cookies_profile"}
+        allowed = {"output_dir", "theme", "ffmpeg_path", "ffprobe_path", "connection_mode", "proxy_url", "cookies_browser", "cookies_profile", "download_lyrics"}
         if key not in allowed:
             self._notify(f"Setting cannot be changed here: {key}")
             return
-        self.settings[key] = str(value)
+        if key == "download_lyrics":
+            enabled = str(value).strip().lower() in {"1", "true", "yes", "on"}
+            self.settings[key] = enabled
+            if not enabled:
+                self._lyrics_download_queue.clear()
+        else:
+            self.settings[key] = str(value)
         self._persist()
         if key in {"ffmpeg_path", "ffprobe_path"}:
             self._status_cache = None
@@ -785,7 +797,7 @@ class AppBridge(QObject):
         except json.JSONDecodeError:
             self._notify("Invalid settings data.")
             return
-        for key in ("output_dir", "theme", "max_retries", "fragment_concurrency", "write_automatic_subtitles", "subtitle_languages", "ffmpeg_path", "ffprobe_path", "connection_mode", "proxy_url", "cookies_browser", "cookies_profile", "recent_searches"):
+        for key in ("output_dir", "theme", "max_retries", "fragment_concurrency", "write_automatic_subtitles", "download_lyrics", "subtitle_languages", "ffmpeg_path", "ffprobe_path", "connection_mode", "proxy_url", "cookies_browser", "cookies_profile", "recent_searches"):
             if key in values:
                 self.settings[key] = values[key]
         self._persist()
