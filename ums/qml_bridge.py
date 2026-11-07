@@ -1152,9 +1152,12 @@ class AppBridge(QObject):
             self.active_worker.cancel()
             self.active_worker.wait(4000)
         if self.lyrics_worker and self.lyrics_worker.isRunning():
-            # LRCLIB requests use a 12-second network timeout; wait for the
-            # worker to leave before Qt tears down its owning AppBridge.
-            self.lyrics_worker.wait(13000)
+            # Multi-provider lyric lookup has bounded HTTP timeouts; let its
+            # worker leave before Qt tears down the owning AppBridge.
+            self.lyrics_worker.wait(33000)
+        if self._lyrics_download_worker and self._lyrics_download_worker.isRunning():
+            self._lyrics_download_worker.wait(33000)
+        self._lyrics_download_queue.clear()
 
 
     @Slot(result=str)
