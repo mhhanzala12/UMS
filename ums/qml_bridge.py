@@ -910,6 +910,9 @@ class AppBridge(QObject):
             enabled = str(value).strip().lower() in {"1", "true", "yes", "on"}
             self.settings[key] = enabled
             if not enabled:
+                for job in self._lyrics_download_queue:
+                    key_path = str(Path(job["audio_path"]).resolve()).casefold()
+                    self._lyrics_download_paths.discard(key_path)
                 self._lyrics_download_queue.clear()
         else:
             self.settings[key] = str(value)
