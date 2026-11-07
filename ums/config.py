@@ -18,6 +18,7 @@ DEFAULT_SETTINGS = {
     "max_retries": 3,
     "fragment_concurrency": 4,
     "write_automatic_subtitles": False,
+    "download_lyrics": True,
     "subtitle_languages": ["all"],
     "connection_mode": "Automatic",
     "proxy_url": "",
