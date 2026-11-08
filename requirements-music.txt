@@ -1,0 +1,2 @@
+# Optional music-library metadata support. yt-dlp is already installed by requirements.txt.
+mutagen>=1.47
