@@ -61,7 +61,7 @@ ColumnLayout {
     function options() {
         var container = String(outputContainer.currentText || "Original").toLowerCase()
         return {
-            format: String(sourceFormat.currentText || "bestvideo+bestaudio/best").trim(),
+            format: String(sourceFormat.editText || sourceFormat.currentText || "bestvideo+bestaudio/best").trim(),
             container: container === "original" ? "original" : container,
             video_codec: videoCodec.currentText,
             audio_codec: audioCodec.currentText,
@@ -76,7 +76,7 @@ ColumnLayout {
             audio_bitrate: audioBitrate.text.trim(),
             crf: String(qualityValue.value),
             encoder_preset: encoderPreset.currentText,
-            fps: String(frameRate.currentText || "Source").trim(),
+            fps: String(frameRate.editText || frameRate.currentText || "Source").trim(),
             fps_mode: frameMode.currentText,
             resolution: resolution.currentText,
             custom_scale: customScale.text.trim(),
