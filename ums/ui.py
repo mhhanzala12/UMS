@@ -1150,12 +1150,20 @@ class QueuePage(QWidget):
         log_frame = QFrame()
         log_frame.setObjectName("Card")
         log_layout = QVBoxLayout(log_frame)
+        log_header = QHBoxLayout()
         log_title = QLabel("Activity log")
         log_title.setObjectName("CardTitle")
+        log_header.addWidget(log_title, 1)
+        export_log_btn = QPushButton("Export activity log")
+        export_log_btn.clicked.connect(self.export_activity_log)
+        log_header.addWidget(export_log_btn)
+        open_app_log_btn = QPushButton("Open application log")
+        open_app_log_btn.clicked.connect(self.open_application_log)
+        log_header.addWidget(open_app_log_btn)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(1200)
-        log_layout.addWidget(log_title)
+        log_layout.addLayout(log_header)
         log_layout.addWidget(self.log_view)
         splitter.addWidget(log_frame)
         splitter.setSizes([440, 190])
@@ -1210,6 +1218,28 @@ class QueuePage(QWidget):
 
     def append_log(self, task_id: str, message: str):
         self.log_view.appendPlainText(f"[{task_id[:8]}] {message}")
+
+    def export_activity_log(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export activity log",
+            str(Path.home() / "Downloads" / "UMS-activity-log.txt"),
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            Path(path).expanduser().write_text(self.log_view.toPlainText(), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(self, "Log export failed", str(exc))
+            return
+        QMessageBox.information(self, "Log exported", f"Activity log saved to:\n{path}")
+
+    def open_application_log(self):
+        from .config import LOG_FILE
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LOG_FILE.touch(exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOG_FILE)))
 
     def refresh(self, tasks: list, active_task_id=None):
         selected_id = self.selected_task() or active_task_id
@@ -2088,6 +2118,7 @@ class MainWindow(QMainWindow):
             self.queue_page.refresh(self.tasks, self.active_task_id)
 
     def on_log(self, task_id, message):
+        logging.getLogger("ums.tasks").info("[%s] %s", task_id, str(message))
         self.queue_page.append_log(task_id, message)
 
     def on_task_completed(self, task_id, status, outputs, error):
