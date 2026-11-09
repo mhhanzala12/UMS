@@ -3266,15 +3266,19 @@ ApplicationWindow {
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: themeColors.border }
             ScrollView {
+                id: logScroll
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.margins: 14
                 clip: true
+                contentWidth: availableWidth
+                ScrollBar.vertical: ScrollBar { active: true }
                 TextArea {
+                    width: logScroll.availableWidth
                     text: window.applicationLogText
                     readOnly: true
                     selectByMouse: true
-                    wrapMode: TextEdit.NoWrap
+                    wrapMode: TextEdit.Wrap
                     color: themeColors.text
                     selectedTextColor: themeColors.bg
                     selectionColor: themeColors.lime
