@@ -632,6 +632,9 @@ def _normalise_webm_options(source: Path, options: dict, ffprobe: Optional[str],
         needs_video_encode = video_choice not in video_allowed
 
     video_encoder = str(adjusted.get("video_encoder") or "Auto")
+    if video_choice == "copy" and video_encoder != "Auto":
+        adjusted["video_encoder"] = "Auto"
+        changes.append("video encoder → Auto")
     supported_video_encoders = {
         "vp8": {"libvpx"},
         "vp9": {"libvpx-vp9"},
