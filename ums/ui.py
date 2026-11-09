@@ -742,6 +742,7 @@ class DownloadPage(QWidget):
         self.analysis_dialog = AnalysisDialog(self)
         self.latest_analysis = None
         self.latest_analysis_url = ""
+        self.analyzing_url = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(18)
@@ -829,6 +830,9 @@ class DownloadPage(QWidget):
             QMessageBox.warning(self, "Invalid URL", "Enter a complete http:// or https:// URL.")
             return
         self.analyze_btn.setEnabled(False)
+        self.analyzing_url = url
+        self.latest_analysis = None
+        self.latest_analysis_url = ""
         self.analysis_label.setText("Inspecting available formats…")
         self.analysis_dialog.show_loading(url)
         self.analysis_worker = AnalyzeWorker(url, self, self.main.settings)
@@ -839,7 +843,7 @@ class DownloadPage(QWidget):
 
     def analysis_done(self, info):
         self.latest_analysis = dict(info)
-        self.latest_analysis_url = self.url.toPlainText().strip().splitlines()[0].strip()
+        self.latest_analysis_url = self.analyzing_url
         self.analysis_dialog.show_result(info)
         title = info.get("title", "Media")
         duration = info.get("duration")
