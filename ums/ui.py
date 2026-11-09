@@ -6,11 +6,12 @@ import uuid
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize, QUrl, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QAction, QFont, QDesktopServices
+from PySide6.QtGui import QAction, QFont, QDesktopServices, QPixmap
 from PySide6.QtWidgets import QGraphicsOpacityEffect
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QInputDialog,
+    QDialog, QDialogButtonBox,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QTableWidget, QTabWidget, QListWidgetItem, QSlider,
@@ -439,11 +440,308 @@ class AdvancedSettingsWidget(QWidget):
             widget.setChecked(bool(options.get(key, checkbox_defaults[key])))
 
 
+class AnalysisDialog(QDialog):
+    """Compact, readable media-inspection window with thumbnail and source details."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("AnalysisDialog")
+        self.setWindowTitle("Analyze URL")
+        self.setModal(False)
+        self.resize(900, 720)
+        self.setMinimumSize(760, 620)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 20, 22, 18)
+        root.setSpacing(12)
+
+        header = QHBoxLayout()
+        intro = QVBoxLayout()
+        eyebrow = QLabel("SOURCE INSPECTION")
+        eyebrow.setObjectName("Eyebrow")
+        self.heading = QLabel("Analyze URL")
+        self.heading.setStyleSheet("font-size: 19pt; font-weight: 750; color: #f5f7fb;")
+        self.status = QLabel("Waiting for the source…")
+        self.status.setObjectName("Muted")
+        intro.addWidget(eyebrow)
+        intro.addWidget(self.heading)
+        intro.addWidget(self.status)
+        header.addLayout(intro, 1)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setFixedWidth(150)
+        header.addWidget(self.progress, 0, Qt.AlignVCenter)
+        root.addLayout(header)
+
+        self.loading_panel = QFrame()
+        self.loading_panel.setObjectName("Card")
+        loading_layout = QVBoxLayout(self.loading_panel)
+        loading_layout.setContentsMargins(22, 22, 22, 22)
+        loading_layout.setSpacing(10)
+        self.loading_title = QLabel("Fetching media information")
+        self.loading_title.setStyleSheet("font-size: 14pt; font-weight: 700;")
+        self.loading_detail = QLabel("yt-dlp is checking the page, available formats, and preview image.")
+        self.loading_detail.setObjectName("Muted")
+        self.loading_detail.setWordWrap(True)
+        loading_layout.addStretch(1)
+        loading_layout.addWidget(self.loading_title, 0, Qt.AlignHCenter)
+        loading_layout.addWidget(self.loading_detail, 0, Qt.AlignHCenter)
+        loading_layout.addStretch(1)
+        root.addWidget(self.loading_panel, 1)
+
+        self.error_panel = QFrame()
+        self.error_panel.setObjectName("Card")
+        error_layout = QVBoxLayout(self.error_panel)
+        error_layout.setContentsMargins(18, 18, 18, 18)
+        self.error_label = QLabel()
+        self.error_label.setWordWrap(True)
+        self.error_label.setStyleSheet("color: #ff9e9e;")
+        error_layout.addWidget(self.error_label)
+        self.error_panel.hide()
+        root.addWidget(self.error_panel, 1)
+
+        self.result_panel = QWidget()
+        result_layout = QVBoxLayout(self.result_panel)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.setSpacing(12)
+
+        hero = QFrame()
+        hero.setObjectName("Card")
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(14, 14, 14, 14)
+        hero_layout.setSpacing(18)
+
+        self.thumbnail = QLabel("Thumbnail will appear here")
+        self.thumbnail.setAlignment(Qt.AlignCenter)
+        self.thumbnail.setFixedSize(330, 186)
+        self.thumbnail.setWordWrap(True)
+        self.thumbnail.setStyleSheet(
+            "background: #101720; border: 1px solid #354356; "
+            "border-radius: 9px; color: #8e9bab; padding: 8px;"
+        )
+        hero_layout.addWidget(self.thumbnail, 0, Qt.AlignTop)
+
+        info_column = QVBoxLayout()
+        info_column.setSpacing(8)
+        self.title_label = QLabel("Untitled media")
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet("font-size: 15pt; font-weight: 750; color: #f5f7fb;")
+        info_column.addWidget(self.title_label)
+
+        metadata = QGridLayout()
+        metadata.setHorizontalSpacing(14)
+        metadata.setVerticalSpacing(8)
+        self.metadata_values = {}
+        labels = [
+            ("Uploader", "uploader"), ("Duration", "duration"),
+            ("Views", "views"), ("Published", "published"),
+            ("Source", "source"), ("Available formats", "formats"),
+            ("Subtitles", "subtitles"), ("Likes", "likes"),
+        ]
+        for index, (label, key) in enumerate(labels):
+            row, col = divmod(index, 2)
+            cell = QVBoxLayout()
+            cell.setSpacing(2)
+            key_label = QLabel(label.upper())
+            key_label.setObjectName("Eyebrow")
+            value_label = QLabel("—")
+            value_label.setWordWrap(True)
+            value_label.setStyleSheet("color: #e7edf5; font-weight: 650;")
+            cell.addWidget(key_label)
+            cell.addWidget(value_label)
+            metadata.addLayout(cell, row, col)
+            self.metadata_values[key] = value_label
+        info_column.addLayout(metadata)
+        info_column.addStretch(1)
+        hero_layout.addLayout(info_column, 1)
+        result_layout.addWidget(hero)
+
+        description_card = QFrame()
+        description_card.setObjectName("Card")
+        description_layout = QVBoxLayout(description_card)
+        description_layout.setContentsMargins(14, 12, 14, 12)
+        description_layout.setSpacing(6)
+        description_title = QLabel("DESCRIPTION")
+        description_title.setObjectName("Eyebrow")
+        description_layout.addWidget(description_title)
+        self.description = QPlainTextEdit()
+        self.description.setReadOnly(True)
+        self.description.setMaximumHeight(100)
+        self.description.setPlaceholderText("No description provided by the source.")
+        description_layout.addWidget(self.description)
+        self.tags_label = QLabel()
+        self.tags_label.setObjectName("Muted")
+        self.tags_label.setWordWrap(True)
+        description_layout.addWidget(self.tags_label)
+        result_layout.addWidget(description_card)
+
+        formats_card = QFrame()
+        formats_card.setObjectName("Card")
+        formats_layout = QVBoxLayout(formats_card)
+        formats_layout.setContentsMargins(14, 12, 14, 12)
+        formats_layout.setSpacing(6)
+        formats_title = QLabel("AVAILABLE FORMATS")
+        formats_title.setObjectName("Eyebrow")
+        formats_layout.addWidget(formats_title)
+        self.formats_table = QTableWidget(0, 5)
+        self.formats_table.setHorizontalHeaderLabels(
+            ["ID", "Container", "Resolution", "FPS", "Video / audio"]
+        )
+        self.formats_table.verticalHeader().setVisible(False)
+        self.formats_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.formats_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.formats_table.setAlternatingRowColors(True)
+        self.formats_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.formats_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.formats_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.formats_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.formats_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.formats_table.setMaximumHeight(190)
+        formats_layout.addWidget(self.formats_table)
+        result_layout.addWidget(formats_card)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(self.result_panel)
+        self.result_panel.hide()
+        root.addWidget(scroll, 1)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        close_button.setMinimumWidth(100)
+        actions.addWidget(close_button)
+        root.addLayout(actions)
+
+    @staticmethod
+    def _number(value):
+        try:
+            return f"{int(value):,}"
+        except (TypeError, ValueError, OverflowError):
+            return "—"
+
+    @staticmethod
+    def _duration(value):
+        try:
+            seconds = max(0, int(float(value)))
+        except (TypeError, ValueError, OverflowError):
+            return "Live / unknown"
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:d}:{seconds:02d}"
+
+    @staticmethod
+    def _date(value):
+        value = str(value or "")
+        if len(value) == 8 and value.isdigit():
+            return f"{value[0:4]}-{value[4:6]}-{value[6:8]}"
+        return value or "—"
+
+    def show_loading(self, url):
+        self.heading.setText("Analyzing media")
+        self.status.setText("Connecting to the source and reading its metadata…")
+        self.loading_detail.setText(url)
+        self.progress.show()
+        self.loading_panel.show()
+        self.error_panel.hide()
+        self.result_panel.hide()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def show_error(self, message):
+        self.heading.setText("Analysis could not be completed")
+        self.status.setText("The source did not return usable media information.")
+        self.progress.hide()
+        self.loading_panel.hide()
+        self.result_panel.hide()
+        self.error_label.setText(str(message))
+        self.error_panel.show()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def show_result(self, info):
+        self.heading.setText("Media information")
+        self.status.setText(
+            f"{info.get('extractor') or 'Media source'} · "
+            f"{len(info.get('formats') or [])} formats found"
+        )
+        self.progress.hide()
+        self.loading_panel.hide()
+        self.error_panel.hide()
+
+        self.title_label.setText(str(info.get("title") or "Untitled media"))
+        values = {
+            "uploader": info.get("uploader") or info.get("channel") or "—",
+            "duration": self._duration(info.get("duration")),
+            "views": self._number(info.get("view_count")),
+            "published": self._date(info.get("upload_date") or info.get("release_date")),
+            "source": info.get("extractor") or "—",
+            "formats": self._number(len(info.get("formats") or [])),
+            "subtitles": self._number(
+                len(info.get("subtitles") or []) + len(info.get("automatic_captions") or [])
+            ),
+            "likes": self._number(info.get("like_count")),
+        }
+        for key, label in self.metadata_values.items():
+            label.setText(str(values.get(key, "—")))
+
+        self.description.setPlainText(str(info.get("description") or "")[:12000])
+        tags = [str(tag) for tag in (info.get("tags") or [])[:12] if tag]
+        self.tags_label.setText("Tags: " + ", ".join(tags) if tags else "")
+
+        pixmap = QPixmap()
+        image_data = info.get("thumbnail_data")
+        if image_data and pixmap.loadFromData(image_data):
+            self.thumbnail.setPixmap(
+                pixmap.scaled(
+                    self.thumbnail.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+            )
+            self.thumbnail.setText("")
+        else:
+            self.thumbnail.setPixmap(QPixmap())
+            self.thumbnail.setText("Preview image unavailable")
+
+        formats = info.get("formats") or []
+        self.formats_table.setRowCount(0)
+        for source_format in formats[:14]:
+            row = self.formats_table.rowCount()
+            self.formats_table.insertRow(row)
+            codecs = " / ".join(
+                str(value) for value in (
+                    source_format.get("vcodec"),
+                    source_format.get("acodec"),
+                ) if value and value != "none"
+            ) or "—"
+            values = [
+                source_format.get("format_id", "—"),
+                source_format.get("ext", "—"),
+                source_format.get("resolution", "—"),
+                source_format.get("fps") or "—",
+                codecs,
+            ]
+            for col, value in enumerate(values):
+                self.formats_table.setItem(row, col, QTableWidgetItem(str(value)))
+        self.result_panel.show()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+
 class DownloadPage(QWidget):
     def __init__(self, main):
         super().__init__()
         self.main = main
         self.analysis_worker = None
+        self.analysis_dialog = AnalysisDialog(self)
+        self.latest_analysis = None
+        self.latest_analysis_url = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(18)
@@ -454,7 +752,7 @@ class DownloadPage(QWidget):
         self.url = QPlainTextEdit()
         self.url.setPlaceholderText("Paste a media URL… (multiple URLs: one per line)")
         self.url.setFixedHeight(76)
-        self.analyze_btn = QPushButton("Analyze")
+        self.analyze_btn = QPushButton("Analyze URL")
         self.analyze_btn.setMinimumHeight(42)
         self.analyze_btn.clicked.connect(self.analyze)
         row.addWidget(self.url, 1)
@@ -527,8 +825,12 @@ class DownloadPage(QWidget):
         if not url:
             QMessageBox.information(self, "URL required", "Paste a media URL first.")
             return
+        if not is_http_url(url):
+            QMessageBox.warning(self, "Invalid URL", "Enter a complete http:// or https:// URL.")
+            return
         self.analyze_btn.setEnabled(False)
         self.analysis_label.setText("Inspecting available formats…")
+        self.analysis_dialog.show_loading(url)
         self.analysis_worker = AnalyzeWorker(url, self, self.main.settings)
         self.analysis_worker.completed.connect(self.analysis_done)
         self.analysis_worker.failed.connect(self.analysis_failed)
@@ -536,6 +838,9 @@ class DownloadPage(QWidget):
         self.analysis_worker.start()
 
     def analysis_done(self, info):
+        self.latest_analysis = dict(info)
+        self.latest_analysis_url = self.url.toPlainText().strip().splitlines()[0].strip()
+        self.analysis_dialog.show_result(info)
         title = info.get("title", "Media")
         duration = info.get("duration")
         duration_text = f" · {int(duration // 60)}:{int(duration % 60):02d}" if isinstance(duration, (int, float)) else ""
@@ -585,6 +890,7 @@ class DownloadPage(QWidget):
     def analysis_failed(self, message):
         self.analysis_label.setText(f"Analysis failed: {message}")
         self.analysis_label.setStyleSheet("color: #ff9e9e;")
+        self.analysis_dialog.show_error(message)
 
     def apply_preset(self, name):
         preset = self.main.presets.get(name)
@@ -667,7 +973,12 @@ class DownloadPage(QWidget):
         options["container"] = "original" if self.output_format.currentText() == "Original" else self.output_format.currentText().lower()
         options["format"] = self.quality.currentData() or "bestvideo+bestaudio/best"
         options["audio_only"] = str(options["format"]).startswith("bestaudio") or options["container"] in {"mp3", "m4a", "aac", "opus", "ogg", "flac", "wav"}
-        self.main.add_download_tasks(urls, options)
+        analysed = (
+            self.latest_analysis
+            if self.latest_analysis and urls[0] == self.latest_analysis_url
+            else None
+        )
+        self.main.add_download_tasks(urls, options, analyzed_info=analysed)
         self.main.navigate("Queue")
 
 
@@ -1653,11 +1964,19 @@ class MainWindow(QMainWindow):
         for key, btn in self.nav_buttons.items():
             btn.setChecked(key == name)
 
-    def add_download_tasks(self, urls: list[str], options: dict):
-        for url in urls:
+    def add_download_tasks(self, urls: list[str], options: dict, analyzed_info=None):
+        analyzed_info = analyzed_info if isinstance(analyzed_info, dict) else {}
+        for index, url in enumerate(urls):
+            media_info = analyzed_info if index == 0 else {}
             task_id = uuid.uuid4().hex[:12]
             task = {
-                "id": task_id, "kind": "download", "url": url, "name": url[:92],
+                "id": task_id, "kind": "download", "url": url,
+                "name": str(media_info.get("title") or url[:92]),
+                "thumbnail": str(media_info.get("thumbnail") or ""),
+                "uploader": str(media_info.get("uploader") or media_info.get("channel") or ""),
+                "duration": media_info.get("duration"),
+                "view_count": media_info.get("view_count"),
+                "upload_date": str(media_info.get("upload_date") or ""),
                 "options": dict(options), "output_dir": self.settings["output_dir"],
                 "status": "Queued", "progress": 0, "detail": "Waiting in queue", "output": "",
             }
