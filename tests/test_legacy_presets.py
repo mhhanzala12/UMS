@@ -73,6 +73,7 @@ class LegacyPresetTests(unittest.TestCase):
             "video_encoder": "libx264",
             "rate_control": "CRF",
             "crf": "23",
+            "embed_subtitles": True,
         }
         adjusted = _normalise_webm_options(
             Path("input.mp4"), options, "ffprobe", "ffmpeg"
