@@ -631,12 +631,26 @@ def _normalise_webm_options(source: Path, options: dict, ffprobe: Optional[str],
     else:
         needs_video_encode = video_choice not in video_allowed
 
+    video_encoder = str(adjusted.get("video_encoder") or "Auto")
+    supported_video_encoders = {
+        "vp8": {"libvpx"},
+        "vp9": {"libvpx-vp9"},
+        "av1": {"libsvtav1", "libaom-av1", "av1_nvenc"},
+    }
+    if video_choice in video_allowed and video_encoder != "Auto":
+        if video_encoder not in supported_video_encoders[video_choice]:
+            adjusted["video_encoder"] = "Auto"
+            changes.append("video encoder → Auto")
+    if video_choice in video_allowed and available:
+        if not (supported_video_encoders[video_choice] & available):
+            needs_video_encode = True
+
     if needs_video_encode:
         if "libvpx-vp9" in available or not available:
             video_choice = "vp9"
         elif "libvpx" in available:
             video_choice = "vp8"
-        elif "libaom-av1" in available:
+        elif {"libsvtav1", "libaom-av1", "av1_nvenc"} & available:
             video_choice = "av1"
         else:
             raise MediaError(
@@ -663,6 +677,11 @@ def _normalise_webm_options(source: Path, options: dict, ffprobe: Optional[str],
         )
     else:
         needs_audio_encode = audio_choice not in audio_allowed
+
+    if audio_choice in audio_allowed and available:
+        expected_audio_encoder = {"opus": "libopus", "vorbis": "libvorbis"}[audio_choice]
+        if expected_audio_encoder not in available:
+            needs_audio_encode = True
 
     if needs_audio_encode:
         if "libopus" in available or not available:
