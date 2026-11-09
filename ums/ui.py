@@ -1829,25 +1829,45 @@ class MainWindow(QMainWindow):
         QMessageBox.about(self, "About Universal Media Studio",
                           "Universal Media Studio 1.0.0\n\nA local-first yt-dlp and FFmpeg GUI for authorized media downloads and conversions.\n\nNo telemetry or remote processing is included. Website availability and output codecs depend on the source and your installed tool builds.")
 
+    def _running_background_workers(self):
+        """Return every live QThread owned by the legacy UI."""
+        candidates = [
+            self.active_worker,
+            getattr(self.download_page, "analysis_worker", None),
+            getattr(self.music_page, "search_worker", None),
+            getattr(self.music_page, "lyrics_worker", None),
+            getattr(self.music_page, "spotify_worker", None),
+            getattr(self.settings_page, "_tool_status_worker", None),
+        ]
+        running = []
+        seen = set()
+        for worker in candidates:
+            if worker is None or id(worker) in seen:
+                continue
+            seen.add(id(worker))
+            try:
+                if worker.isRunning():
+                    running.append(worker)
+            except RuntimeError:
+                # A completed Qt worker may already have been deleted.
+                continue
+        return running
+
     def _maybe_close_after_background(self):
         if not self._close_after_worker:
             return
-        media_running = bool(self.active_worker and self.active_worker.isRunning())
-        status_worker = getattr(self.settings_page, "_tool_status_worker", None)
-        status_running = bool(status_worker and status_worker.isRunning())
-        if not media_running and not status_running:
+        if not self._running_background_workers():
             self._close_after_worker = False
             self.close()
 
     def closeEvent(self, event):
-        # Do not destroy a QThread while it is running. Ask before cancelling
-        # active media work, then close only after all owned workers have stopped.
+        # Do not destroy a QThread while it is running. Media work can be
+        # cancelled; short catalog/analysis/tool workers are allowed to finish.
         if self._close_after_worker:
             event.ignore()
             return
+        running_workers = self._running_background_workers()
         media_running = bool(self.active_worker and self.active_worker.isRunning())
-        status_worker = getattr(self.settings_page, "_tool_status_worker", None)
-        status_running = bool(status_worker and status_worker.isRunning())
         if media_running:
             reply = QMessageBox.question(
                 self, "Stop active task?",
@@ -1859,15 +1879,18 @@ class MainWindow(QMainWindow):
                 return
             self._close_after_worker = True
             self.active_worker.cancel()
-        elif status_running:
-            # Tool discovery is harmless background work; defer closing until
-            # its QThread has returned instead of blocking the interface.
+        elif running_workers:
             self._close_after_worker = True
+
         if self._close_after_worker:
-            if status_running:
-                status_worker.finished.connect(self._maybe_close_after_background)
-                if not status_worker.isRunning():
-                    self._maybe_close_after_background()
+            # Connect all currently running workers. The shared handler checks
+            # the full set, so whichever one finishes last closes the window.
+            for worker in running_workers:
+                try:
+                    worker.finished.connect(self._maybe_close_after_background)
+                except RuntimeError:
+                    continue
+            self._maybe_close_after_background()
             event.ignore()
         else:
             event.accept()
