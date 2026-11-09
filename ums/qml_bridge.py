@@ -29,7 +29,8 @@ from .workers import AnalyzeWorker, FunctionWorker, MediaTaskWorker
 # Only the fields the QML queue/downloads view reads. The old queueJson() also
 # serialised every task's options dict and up to 80 log lines on each update.
 _QUEUE_FIELDS = ("id", "kind", "name", "status", "progress", "detail", "output", "outputs",
-                 "group_id", "group_name", "group_cover", "music_track")
+                 "group_id", "group_name", "group_cover", "music_track", "thumbnail",
+                 "uploader", "duration", "view_count", "upload_date")
 QUEUE_EMIT_INTERVAL_MS = 150
 
 
@@ -45,6 +46,7 @@ class AppBridge(QObject):
     queueChanged = Signal()
     statusChanged = Signal(str)
     analysisReady = Signal(str)
+    analysisFailed = Signal(str)
     presetsChanged = Signal(str)
     settingsChanged = Signal(str)
     searchResults = Signal(str)
@@ -65,6 +67,8 @@ class AppBridge(QObject):
         self.active_task_id = None
         self.active_worker = None
         self.analysis_worker = None
+        self._last_analysis_url = ""
+        self._last_analysis = {}
         self.search_worker = None
         self.spotify_worker = None
         self.lyrics_worker = None
@@ -306,10 +310,18 @@ class AppBridge(QObject):
             return
         self.statusChanged.emit(json.dumps({"analysis": "Inspecting source…"}))
         self.analysis_worker = AnalyzeWorker(url, self, settings=self.settings)
-        self.analysis_worker.completed.connect(lambda data: self.analysisReady.emit(json.dumps(data)))
-        self.analysis_worker.failed.connect(self._notify)
+        self.analysis_worker.completed.connect(lambda data: self._analysis_ready(url, data))
+        self.analysis_worker.failed.connect(self.analysisFailed.emit)
         self.analysis_worker.finished.connect(self._cleanup_finished_worker)
         self.analysis_worker.start()
+
+    def _analysis_ready(self, url, data):
+        # The legacy Widgets dialog uses thumbnail_data bytes. QML loads the
+        # thumbnail URL itself, so strip binary bytes before JSON serialization.
+        clean = {key: value for key, value in dict(data or {}).items() if key != "thumbnail_data"}
+        self._last_analysis_url = str(url)
+        self._last_analysis = clean
+        self.analysisReady.emit(json.dumps(clean, ensure_ascii=False))
 
     @Slot(str, str, str)
     def enqueueDownload(self, url, preset_name, container="Original"):
@@ -320,7 +332,15 @@ class AppBridge(QObject):
         options = dict(self.presets.get(preset_name) or self.presets.get("Balanced Quality and Size") or {})
         container = str(container or "Original").strip().lower()
         options["container"] = "original" if container == "original" else container
-        self._new_task("download", url, options, url=url)
+        media = self._last_analysis if self._last_analysis_url == url else {}
+        self._new_task(
+            "download", media.get("title") or url, options, url=url,
+            thumbnail=media.get("thumbnail") or "",
+            uploader=media.get("uploader") or media.get("channel") or "",
+            duration=media.get("duration"),
+            view_count=media.get("view_count"),
+            upload_date=media.get("upload_date") or "",
+        )
 
     @Slot(str)
     def enqueueSpotify(self, url):
