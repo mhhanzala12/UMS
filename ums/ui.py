@@ -1483,8 +1483,10 @@ class SettingsPage(QWidget):
         self.main.settings["max_retries"] = self.retries.value()
         self.main.settings["fragment_concurrency"] = self.fragments.value()
         self.main.save_settings()
-        self.main.refresh_global_status()
+        # Start tool discovery first so the sidebar can subscribe to its result
+        # instead of blocking the GUI with a second synchronous FFmpeg probe.
         self.refresh_tool_status()
+        self.main.refresh_global_status()
         QMessageBox.information(self, "Settings saved", "Your settings have been saved locally.")
 
 
