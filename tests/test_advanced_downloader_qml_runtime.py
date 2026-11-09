@@ -5,18 +5,14 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-try:
-    from PySide6.QtCore import QUrl
-    from PySide6.QtGui import QGuiApplication
-    from PySide6.QtQml import QQmlComponent, QQmlEngine
-except ImportError:  # The desktop dependency is installed by the GitHub Actions workflow.
-    QUrl = QGuiApplication = QQmlComponent = QQmlEngine = None
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QGuiApplication
+from PySide6.QtQml import QQmlComponent, QQmlEngine
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@unittest.skipIf(QQmlEngine is None, "PySide6 is not installed")
 class AdvancedDownloaderQmlTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
