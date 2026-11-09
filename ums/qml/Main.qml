@@ -3275,6 +3275,7 @@ ApplicationWindow {
                 ScrollBar.vertical: ScrollBar { active: true }
                 TextArea {
                     width: logScroll.availableWidth
+                    height: Math.max(logScroll.availableHeight, contentHeight + 24)
                     text: window.applicationLogText
                     readOnly: true
                     selectByMouse: true
