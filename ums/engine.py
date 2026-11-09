@@ -850,7 +850,7 @@ def _validate_webm_streams(validation: dict) -> None:
             )
 
 
-def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg_path=
+def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg_path=None,
               ffprobe_path=None, cancel_event=None, progress_cb=None, subtitle_files=None,
               log_cb=None) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
