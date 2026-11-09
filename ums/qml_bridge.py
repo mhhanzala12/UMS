@@ -289,6 +289,7 @@ class AppBridge(QObject):
     def _notify(self, message):
         message = str(message)
         logging.getLogger(__name__).info("UI notice: %s", message[:1200])
+        self.logUpdated.emit()
         self.errorRaised.emit(message)
 
     def _new_task(self, kind, name, options=None, **fields):
