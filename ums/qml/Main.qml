@@ -1582,6 +1582,10 @@ ApplicationWindow {
                                         toast.showMessage("Paste a media URL first.", true)
                                         return
                                     }
+                                    if (!/^https?:\/\/[^\/\s?#]+(?:[\/?#]|$)/i.test(urls[0])) {
+                                        toast.showMessage("Enter a complete http:// or https:// media URL.", true)
+                                        return
+                                    }
                                     window.analysisTargetUrl = urls[0]
                                     window.analysisBusy = true
                                     window.analysisError = ""
