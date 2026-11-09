@@ -2822,18 +2822,26 @@ ApplicationWindow {
                 }
 
                 ScrollView {
+                    id: analysisScroll
                     anchors.fill: parent
                     anchors.margins: 14
                     clip: true
                     visible: !window.analysisBusy && window.analysisError.length === 0 && !!window.analysisData.title
+                    // Give the scroll content the viewport width explicitly.
+                    // Otherwise implicitWidth <-> parent.width can collapse
+                    // the inspector and make all child layouts overlap.
+                    contentWidth: availableWidth
                     ScrollBar.vertical: ScrollBar { active: true }
 
                     ColumnLayout {
-                        width: parent.width
+                        id: analysisContent
+                        width: analysisScroll.availableWidth
                         spacing: 12
 
                         Rectangle {
                             Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: analysisScroll.availableWidth
                             radius: 13
                             color: themeColors.panel2
                             border.color: themeColors.border
@@ -2846,8 +2854,11 @@ ApplicationWindow {
                                 spacing: 16
 
                                 Rectangle {
-                                    Layout.preferredWidth: Math.min(300, Math.max(190, analysisDialog.width * 0.34))
-                                    Layout.preferredHeight: Math.min(169, Math.max(107, analysisDialog.width * 0.19))
+                                    Layout.minimumWidth: 180
+                                    Layout.maximumWidth: 300
+                                    Layout.preferredWidth: Math.min(300, Math.max(180, analysisContent.width * 0.34))
+                                    Layout.preferredHeight: Layout.preferredWidth * 9 / 16
+                                    Layout.fillHeight: true
                                     radius: 9
                                     color: themeColors.panel3
                                     border.color: themeColors.border
@@ -2913,12 +2924,14 @@ ApplicationWindow {
                                 }
 
                                 ColumnLayout {
+                                    Layout.minimumWidth: 0
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
                                     Layout.alignment: Qt.AlignVCenter
                                     spacing: 8
 
                                     Text {
+                                        Layout.minimumWidth: 0
                                         text: window.analysisData.title || "Untitled media"
                                         color: themeColors.text
                                         font.pixelSize: 18
@@ -2930,6 +2943,7 @@ ApplicationWindow {
                                     }
 
                                     Text {
+                                        Layout.minimumWidth: 0
                                         text: window.analysisData.uploader || window.analysisData.channel ||
                                               window.analysisData.creator || "Unknown creator"
                                         color: themeColors.muted
@@ -2939,6 +2953,7 @@ ApplicationWindow {
                                     }
 
                                     Text {
+                                        Layout.minimumWidth: 0
                                         text: window.analysisData.channel_url || window.analysisData.webpage_url || ""
                                         color: themeColors.subtle
                                         font.pixelSize: 9
@@ -2978,17 +2993,21 @@ ApplicationWindow {
                             }
                         }
 
-                        GridLayout {
+                        Flow {
+                            id: analysisMetadataFlow
                             Layout.fillWidth: true
-                            columns: analysisDialog.width < 760 ? 2 : 4
-                            columnSpacing: 9
-                            rowSpacing: 9
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: analysisScroll.availableWidth
+                            Layout.preferredHeight: Math.ceil(metadataRepeater.count / metadataColumns) * 66 - 9
+                            spacing: 9
+                            property int metadataColumns: analysisDialog.width < 680 ? 2 : 4
 
                             Repeater {
+                                id: metadataRepeater
                                 model: [
                                     {label: "DURATION", value: window.analysisData.is_live ? "Live" : window.formatMediaDuration(window.analysisData.duration)},
                                     {label: "RESOLUTION", value: window.analysisData.resolution || "—"},
-                                    {label: "FRAME RATE", value: Number(window.analysisData.fps) > 0 ? Number(window.analysisData.fps).toFixed(2).replace(/\.00$/, "") + " FPS" : "—"},
+                                    {label: "FRAME RATE", value: Number(window.analysisData.fps) > 0 ? Number(window.analysisData.fps).toFixed(2).replace(/\\.00$/, "") + " FPS" : "—"},
                                     {label: "VIEWS", value: window.displayCount(window.analysisData.view_count)},
                                     {label: "LIKES", value: window.displayCount(window.analysisData.like_count)},
                                     {label: "PUBLISHED", value: window.displayMediaDate(window.analysisData.upload_date || window.analysisData.release_date)},
@@ -3000,17 +3019,32 @@ ApplicationWindow {
                                     {label: "MEDIA ID", value: window.analysisData.id || "—"}
                                 ]
                                 delegate: Rectangle {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 57
+                                    width: Math.max(1, (analysisMetadataFlow.width - analysisMetadataFlow.spacing * (analysisMetadataFlow.metadataColumns - 1)) / analysisMetadataFlow.metadataColumns)
+                                    height: 57
                                     radius: 9
                                     color: themeColors.panel2
                                     border.color: themeColors.border
-                                    ColumnLayout {
+                                    Column {
                                         anchors.fill: parent
                                         anchors.margins: 10
                                         spacing: 4
-                                        Text { text: modelData.label; color: themeColors.subtle; font.pixelSize: 8; font.weight: Font.Bold; font.letterSpacing: 0.7 }
-                                        Text { text: modelData.value; color: themeColors.text; font.pixelSize: 11; font.weight: Font.DemiBold; elide: Text.ElideRight; Layout.fillWidth: true }
+                                        Text {
+                                            width: parent.width
+                                            text: modelData.label
+                                            color: themeColors.subtle
+                                            font.pixelSize: 8
+                                            font.weight: Font.Bold
+                                            font.letterSpacing: 0.7
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            width: parent.width
+                                            text: String(modelData.value || "—")
+                                            color: themeColors.text
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                            elide: Text.ElideRight
+                                        }
                                     }
                                 }
                             }
@@ -3018,6 +3052,8 @@ ApplicationWindow {
 
                         Rectangle {
                             Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: analysisScroll.availableWidth
                             radius: 11
                             color: themeColors.panel2
                             border.color: themeColors.border
@@ -3052,6 +3088,8 @@ ApplicationWindow {
 
                         Rectangle {
                             Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: analysisScroll.availableWidth
                             radius: 11
                             color: themeColors.panel2
                             border.color: themeColors.border
