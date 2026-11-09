@@ -247,7 +247,8 @@ def _download_thumbnail_data(url: str, timeout: float = 4.0,
                 _LOG.debug("Skipped oversized media thumbnail (%s bytes)", len(data))
                 return b""
             return data
-    except (OSError, urllib.error.URLError, TimeoutError, ValueError) as exc:
+    except Exception as exc:
+        # A preview is optional metadata; a CDN error must never fail analysis.
         _LOG.debug("Thumbnail preview download failed: %s", exc)
         return b""
 
