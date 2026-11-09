@@ -122,22 +122,11 @@ def _selftest_failure(resource_root: Path, qml_warnings: list) -> int:
 
 
 def _configure_startup_logging():
-    log_path = Path.home() / ".universal_media_studio" / "startup.log"
-    try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        logging.basicConfig(
-            filename=str(log_path),
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(message)s",
-            encoding="utf-8",
-            force=True,
-        )
-        logging.info("Starting Universal Media Studio")
-        return log_path
-    except Exception:
-        logging.basicConfig(level=logging.INFO, force=True)
-        logging.exception("Could not initialize the startup log file")
-        return None
+    from ums.config import configure_logging
+
+    log_path = configure_logging()
+    logging.info("Starting Universal Media Studio")
+    return log_path
 
 
 def main():
