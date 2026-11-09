@@ -100,7 +100,7 @@ class WebMCompatibilityTests(unittest.TestCase):
             ):
                 result = _finalize(
                     source, output_dir,
-                    {"container": "original", "video_codec": "copy", "audio_codec": "copy"},
+                    {"container": "original", "video_codec": "copy", "audio_codec": "copy", "fps": "24"},
                     "webm-retry-test",
                     log_cb=lambda _message: None,
                 )
