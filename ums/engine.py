@@ -974,10 +974,13 @@ def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg
     ffmpeg = _which("ffmpeg", ffmpeg_path)
     ffprobe = _which("ffprobe", ffprobe_path)
     options = dict(options or {})
-    if container == "webm":
-        if not ffmpeg:
-            raise MediaError("FFmpeg is required to create WebM output. Install FFmpeg and make sure ffmpeg is on PATH.")
-        options = _normalise_webm_options(source, options, ffprobe, ffmpeg, log_cb)
+    # "Original" is a user-facing selection, not a muxer. Detect the actual
+    # output container from the final filename too: a downloaded .webm source
+    # can still need a re-encode/remux, and it must receive the same codec
+    # validation/recovery as an explicitly selected WebM output.
+    is_webm_output = suffix.casefold() == ".webm"
+    if is_webm_output:
+        options["container"] = "webm"
     wants_edit = (
         container != "original" or
         (options.get("video_codec", "copy").lower() != "copy" and not audio_only) or
@@ -987,6 +990,10 @@ def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg
         bool(options.get("custom_scale")) or
         bool(options.get("embed_subtitles"))
     )
+    if is_webm_output and wants_edit:
+        if not ffmpeg:
+            raise MediaError("FFmpeg is required to create or edit WebM output. Install FFmpeg and make sure ffmpeg is on PATH.")
+        options = _normalise_webm_options(source, options, ffprobe, ffmpeg, log_cb)
     if not wants_edit:
         _check_cancel(cancel_event)
         shutil.move(str(source), str(target))
@@ -1011,7 +1018,7 @@ def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg
             except MediaError as first_error:
                 error_text = str(first_error).casefold()
                 webm_muxer_rejected_codecs = (
-                    container == "webm"
+                    is_webm_output
                     and (
                         "only vp8 or vp9 or av1 video" in error_text
                         or (
@@ -1044,7 +1051,7 @@ def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg
     if not target.exists() or target.stat().st_size == 0:
         raise MediaError("The output file is missing or empty.")
     validation = _probe(target, ffprobe)
-    if container == "webm":
+    if is_webm_output:
         try:
             _validate_webm_streams(validation)
         except MediaError:
