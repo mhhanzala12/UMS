@@ -7,6 +7,7 @@ GUI thread.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from pathlib import Path
@@ -15,7 +16,7 @@ from PySide6.QtCore import QObject, QTimer, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QFileDialog
 
-from .config import load_settings, save_settings
+from .config import LOG_BACKUP_COUNT, LOG_FILE, load_settings, save_settings
 from .engine import is_http_url, tool_status
 from .lyrics import find_lrc_sidecar, lyric_match_score, parse_lrc
 from .music import (
@@ -44,6 +45,7 @@ def _multimedia():
 
 class AppBridge(QObject):
     queueChanged = Signal()
+    logUpdated = Signal()
     statusChanged = Signal(str)
     analysisReady = Signal(str)
     analysisFailed = Signal(str)
@@ -285,7 +287,9 @@ class AppBridge(QObject):
             self._queue_timer.start()
 
     def _notify(self, message):
-        self.errorRaised.emit(str(message))
+        message = str(message)
+        logging.getLogger(__name__).info("UI notice: %s", message[:1200])
+        self.errorRaised.emit(message)
 
     def _new_task(self, kind, name, options=None, **fields):
         task = {
@@ -777,10 +781,14 @@ class AppBridge(QObject):
 
     def _on_log(self, task_id, message):
         task = self._find_task(task_id)
+        message = str(message)
         if task:
             logs = task.setdefault("logs", [])
-            logs.append(str(message))
+            logs.append(message)
             task["logs"] = logs[-80:]
+            # Keep the global log useful even after a task card is removed.
+            logging.getLogger("ums.tasks").info("[%s] %s", task_id, message)
+            self.logUpdated.emit()
 
     def _on_completed(self, task_id, status, outputs, error):
         task = self._find_task(task_id)
@@ -1077,6 +1085,71 @@ class AppBridge(QObject):
         self.playlists.pop(str(name), None)
         save_music_playlists(self.playlists)
         self.playlistsChanged.emit(json.dumps(self.playlists))
+
+    @Slot(result=str)
+    def logPath(self):
+        """Return the path of the rotating application log."""
+        return str(LOG_FILE)
+
+    def _read_log_text(self, max_chars=8 * 1024 * 1024):
+        # Include rotated files oldest-to-newest. The viewer uses a smaller cap
+        # than export so opening the dialog stays responsive on slower machines.
+        paths = [
+            LOG_FILE.with_name(LOG_FILE.name + f".{index}")
+            for index in range(LOG_BACKUP_COUNT, 0, -1)
+        ] + [LOG_FILE]
+        chunks = []
+        for path in paths:
+            try:
+                if path.is_file():
+                    chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+            except OSError as exc:
+                logging.getLogger(__name__).warning("Could not read log %s: %s", path, exc)
+        output = "\n".join(part.rstrip() for part in chunks if part.strip())
+        if not output:
+            return "No application log has been written yet."
+        if len(output) > max_chars:
+            output = "[Earlier log output omitted to keep this view bounded.]\n" + output[-max_chars:]
+        return output
+
+    @Slot(result=str)
+    def readLog(self):
+        """Return recent application and task diagnostics for the in-app viewer."""
+        return self._read_log_text(max_chars=250_000)
+
+    @Slot()
+    def openLogFile(self):
+        try:
+            LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LOG_FILE.touch(exist_ok=True)
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOG_FILE))):
+                self._notify("Could not open the application log with the default text editor.")
+        except OSError as exc:
+            logging.getLogger(__name__).exception("Could not open the application log")
+            self._notify(f"Could not open application log: {exc}")
+
+    @Slot()
+    def exportLog(self):
+        suggested = Path.home() / "Downloads" / "UMS-application-log.txt"
+        destination, _ = QFileDialog.getSaveFileName(
+            None,
+            "Export application log",
+            str(suggested),
+            "Text files (*.txt);;Log files (*.log);;All files (*)",
+        )
+        if not destination:
+            return
+        try:
+            Path(destination).expanduser().write_text(
+                self._read_log_text(max_chars=8 * 1024 * 1024),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logging.getLogger(__name__).exception("Could not export the application log")
+            self._notify(f"Could not export application log: {exc}")
+            return
+        logging.getLogger(__name__).info("Application log exported to %s", destination)
+        self._notify(f"Application log exported to {destination}")
 
     @Slot(str)
     def openCatalogUrl(self, url):
