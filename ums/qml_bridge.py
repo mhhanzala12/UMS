@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from .config import LOG_BACKUP_COUNT, LOG_FILE, load_settings, save_settings
 from .engine import is_http_url, tool_status
@@ -24,7 +24,8 @@ from .music import (
     SpotifyResolveWorker, PLAYLISTS_KEY, load_music_playlists, save_music_playlists,
     scan_audio_library,
 )
-from .presets import merged_presets
+from .presets import PRESETS, _valid_preset_name, merged_presets
+from .download_options import sanitize_download_options
 from .workers import AnalyzeWorker, FunctionWorker, MediaTaskWorker
 
 # Only the fields the QML queue/downloads view reads. The old queueJson() also
@@ -330,24 +331,90 @@ class AppBridge(QObject):
         self._last_analysis = clean
         self.analysisReady.emit(json.dumps(clean, ensure_ascii=False))
 
-    @Slot(str, str, str)
-    def enqueueDownload(self, url, preset_name, container="Original"):
-        url = str(url).strip()
+    def _enqueue_download(self, url: str, options: dict):
+        url = str(url or "").strip()
         if not is_http_url(url):
             self._notify("Paste a valid http:// or https:// media URL with a hostname.")
             return
-        options = dict(self.presets.get(preset_name) or self.presets.get("Balanced Quality and Size") or {})
-        container = str(container or "Original").strip().lower()
-        options["container"] = "original" if container == "original" else container
+        try:
+            clean_options = sanitize_download_options(options)
+        except ValueError as exc:
+            self._notify(f"Invalid downloader options: {exc}")
+            return
         media = self._last_analysis if self._last_analysis_url == url else {}
         self._new_task(
-            "download", media.get("title") or url, options, url=url,
+            "download", media.get("title") or url, clean_options, url=url,
             thumbnail=media.get("thumbnail") or "",
             uploader=media.get("uploader") or media.get("channel") or "",
             duration=media.get("duration"),
             view_count=media.get("view_count"),
             upload_date=media.get("upload_date") or "",
         )
+
+    @Slot(str, str, str)
+    def enqueueDownload(self, url, preset_name, container="Original"):
+        """Compatibility entry point for older QML builds and external callers."""
+        options = dict(
+            self.presets.get(preset_name)
+            or self.presets.get("Balanced Quality and Size")
+            or {}
+        )
+        selected_container = str(container or "Original").strip().lower()
+        options["container"] = "original" if selected_container == "original" else selected_container
+        self._enqueue_download(url, options)
+
+    @Slot(str, str)
+    def enqueueDownloadWithOptions(self, url, options_json):
+        """Queue a download with the complete modern advanced-control payload."""
+        try:
+            options = json.loads(str(options_json or "{}"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            self._notify("Could not read the advanced downloader options.")
+            return
+        self._enqueue_download(url, options)
+
+    @Slot(str)
+    def saveCustomPreset(self, options_json):
+        """Save the current advanced-control values as a validated user preset."""
+        try:
+            options = sanitize_download_options(json.loads(str(options_json or "{}")))
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            self._notify(f"Cannot save this preset: {exc}")
+            return
+
+        name, accepted = QInputDialog.getText(
+            None, "Save custom preset", "Preset name (1–48 characters):"
+        )
+        if not accepted:
+            return
+        name = str(name).strip()
+        if not _valid_preset_name(name):
+            self._notify(
+                "Preset names must be 1–48 characters, start with a letter or number, "
+                "and end with a letter, number, or closing parenthesis."
+            )
+            return
+        if name in PRESETS:
+            self._notify("Built-in presets are protected. Choose a different name.")
+            return
+
+        custom = self.settings.setdefault("custom_presets", {})
+        if name in custom:
+            answer = QMessageBox.question(
+                None,
+                "Replace custom preset?",
+                f"A custom preset named “{name}” already exists. Replace it?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        custom[name] = options
+        self._persist()
+        self.presets = merged_presets(custom)
+        self.presetsChanged.emit(json.dumps(self.presets, ensure_ascii=False))
+        self._notify(f"Saved custom preset: {name}")
 
     @Slot(str)
     def enqueueSpotify(self, url):
