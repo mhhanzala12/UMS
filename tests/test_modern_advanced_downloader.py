@@ -54,6 +54,13 @@ class ModernAdvancedDownloaderTests(unittest.TestCase):
         self.assertIn("def enqueueDownloadWithOptions(self, url, options_json)", self.bridge)
         self.assertIn("sanitize_download_options(options)", self.bridge)
 
+    def test_local_converter_uses_the_same_complete_advanced_panel(self):
+        self.assertIn("id: conversionAdvancedPanel", self.main)
+        self.assertIn("showSourceQuality: false", self.main)
+        self.assertIn("conversionAdvancedPanel.options()", self.main)
+        self.assertIn("bridge.enqueueConversionWithAdvancedOptions", self.main)
+        self.assertIn("def enqueueConversionWithAdvancedOptions(self, source, options_json)", self.bridge)
+
 
 if __name__ == "__main__":
     unittest.main()
