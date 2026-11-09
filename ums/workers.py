@@ -52,7 +52,9 @@ class AnalyzeWorker(QThread):
                     from urllib.parse import urlsplit
                     from urllib.request import Request, urlopen
 
-                    if urlsplit(thumbnail_url).scheme.lower() not in {"http", "https"}:
+                    parsed_thumbnail = urlsplit(thumbnail_url)
+                    if parsed_thumbnail.scheme.lower() != "https" or not parsed_thumbnail.hostname:
+                        raise ValueError("Thumbnail URL must use a public HTTPS address.")
                         raise ValueError("Thumbnail URL must use HTTP or HTTPS.")
                     request = Request(
                         thumbnail_url,
@@ -62,10 +64,11 @@ class AnalyzeWorker(QThread):
                         content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
                         image_data = response.read(4 * 1024 * 1024 + 1)
                     valid_signature = (
-                        image_data.startswith(b"\\xff\\xd8\\xff")
-                        or image_data.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
+                        image_data.startswith(bytes((255, 216, 255)))
+                        or image_data.startswith(bytes((137, 80, 78, 71, 13, 10, 26, 10)))
                         or (image_data.startswith(b"RIFF") and image_data[8:12] == b"WEBP")
                         or image_data.startswith((b"GIF87a", b"GIF89a"))
+                    )
                     )
                     if len(image_data) <= 4 * 1024 * 1024 and (
                         content_type.startswith("image/") or valid_signature
