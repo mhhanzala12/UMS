@@ -76,6 +76,7 @@ ApplicationWindow {
     property string searchKind: "All"
     property string spotifyUrl: ""
     property string presetName: "Best Available Quality"
+    property string conversionPresetName: "Balanced Quality and Size"
     property var presets: JSON.parse(bridge.presetsJson())
     property var queueItems: JSON.parse(bridge.queueJson())
     property var settingsData: JSON.parse(bridge.settingsJson())
@@ -2304,46 +2305,18 @@ ApplicationWindow {
  verticalAlignment: Text.AlignVCenter
  padding: 8 } }
                         }
-                        RowLayout {
-                            ComboBox { id: outputContainer
- Layout.fillWidth: true
- model: ["mp4","mkv","webm","mov","avi","mp3","m4a","flac","wav","opus"]
- background: Rectangle { radius: 7
- color: themeColors.panel2
- border.color: themeColors.border }
- contentItem: Text { leftPadding: 10
- text: outputContainer.displayText
- color: themeColors.text
- font.pixelSize: 10
- verticalAlignment: Text.AlignVCenter } }
-                            ComboBox { id: outputVideoCodec
- Layout.fillWidth: true
- model: ["copy","h264","hevc","av1","vp9","vp8"]
- background: Rectangle { radius: 7
- color: themeColors.panel2
- border.color: themeColors.border }
- contentItem: Text { leftPadding: 10
- text: outputVideoCodec.displayText
- color: themeColors.text
- font.pixelSize: 10
- verticalAlignment: Text.AlignVCenter } }
-                            ComboBox { id: outputAudioCodec
- Layout.fillWidth: true
- model: ["copy","aac","mp3","opus","vorbis","flac","alac"]
- background: Rectangle { radius: 7
- color: themeColors.panel2
- border.color: themeColors.border }
- contentItem: Text { leftPadding: 10
- text: outputAudioCodec.displayText
- color: themeColors.text
- font.pixelSize: 10
- verticalAlignment: Text.AlignVCenter } }
+                        AdvancedDownloadPanel {
+                            id: conversionAdvancedPanel
+                            Layout.fillWidth: true
+                            palette: window.themeColors
+                            presets: window.presets
+                            selectedPreset: window.conversionPresetName
+                            showSourceQuality: false
+                            onPresetChanged: function(name) { window.conversionPresetName = name }
+                            onSavePresetRequested: function(optionsJson) { bridge.saveCustomPreset(optionsJson) }
                         }
-                        Text { text: "Output container  ·  Video codec  ·  Audio codec"
- color: themeColors.subtle
- font.pixelSize: 9 }
                         Button { text: "Add conversion to queue  →"
- onClicked: bridge.enqueueConversionWithOptions(conversionSource.text, outputContainer.currentText, outputVideoCodec.currentText, outputAudioCodec.currentText)
+ onClicked: bridge.enqueueConversionWithAdvancedOptions(conversionSource.text, JSON.stringify(conversionAdvancedPanel.options()))
  background: Rectangle { radius: 8
  color: themeColors.lime }
  contentItem: Text { text: parent.text
