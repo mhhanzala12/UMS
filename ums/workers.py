@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 from typing import Callable
+
 from PySide6.QtCore import QThread, Signal
 
 from .engine import CancelledError, analyze_url, convert_file, download_and_process
@@ -11,6 +12,7 @@ from .music import run_music_download
 
 class FunctionWorker(QThread):
     """Run any blocking callable off the GUI thread and report its result by signal."""
+
     done = Signal(object)
     failed = Signal(str)
 
@@ -29,12 +31,18 @@ class FunctionWorker(QThread):
 
 
 class AnalyzeWorker(QThread):
+    """Analyze source metadata and preview image away from the GUI thread.
+
+    Thumbnail selection and fetching are handled by analyze_url(), ensuring that
+    the preview fallback list and the returned bytes belong to the same analysis.
+    """
+
     completed = Signal(object)
     failed = Signal(str)
 
     def __init__(self, url: str, parent=None, settings=None):
         super().__init__(parent)
-        self.url = url
+        self.url = str(url or "").strip()
         self.settings = dict(settings or {})
         self.cancel_event = threading.Event()
 
@@ -46,53 +54,12 @@ class AnalyzeWorker(QThread):
             info = analyze_url(self.url, self.cancel_event, self.settings)
             if self.cancel_event.is_set():
                 raise CancelledError("Analysis cancelled.")
-            thumbnail_url = str(info.get("thumbnail") or "").strip()
-            if thumbnail_url:
-                try:
-                    from urllib.parse import urlsplit
-                    from urllib.request import Request, urlopen
-
-                    parsed_thumbnail = urlsplit(thumbnail_url)
-                    if parsed_thumbnail.scheme.lower() != "https" or not parsed_thumbnail.hostname:
-                        raise ValueError("Thumbnail URL must use a public HTTPS address.")
-                        raise ValueError("Thumbnail URL must use HTTP or HTTPS.")
-                    request = Request(
-                        thumbnail_url,
-                        headers={"User-Agent": "UniversalMediaStudio/1.0"},
-                    )
-                    with urlopen(request, timeout=8) as response:
-                        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
-                        image_data = response.read(4 * 1024 * 1024 + 1)
-                    valid_signature = (
-                        image_data.startswith(bytes((255, 216, 255)))
-                        or image_data.startswith(bytes((137, 80, 78, 71, 13, 10, 26, 10)))
-                        or (image_data.startswith(b"RIFF") and image_data[8:12] == b"WEBP")
-                        or image_data.startswith((b"GIF87a", b"GIF89a"))
-                    )
-                    )
-                    if len(image_data) <= 4 * 1024 * 1024 and (
-                        content_type.startswith("image/") or valid_signature
-                    ):
-                        info["thumbnail_data"] = image_data
-                    else:
-                        logging.getLogger(__name__).warning(
-                            "Thumbnail response was not a supported image or exceeded 4 MiB."
-                        )
-                except Exception as thumb_error:
-                    # Metadata analysis remains successful if the preview image
-                    # is unavailable, blocked, or served in an unsupported format.
-                    logging.getLogger(__name__).warning(
-                        "Could not fetch the media thumbnail: %s", thumb_error
-                    )
-            if self.cancel_event.is_set():
-                raise CancelledError("Analysis cancelled.")
             self.completed.emit(info)
+        except CancelledError as exc:
+            self.failed.emit(str(exc))
         except Exception as exc:
-            if isinstance(exc, CancelledError):
-                self.failed.emit(str(exc))
-            else:
-                logging.getLogger(__name__).exception("URL analysis worker failed")
-                self.failed.emit(str(exc))
+            logging.getLogger(__name__).exception("URL analysis worker failed")
+            self.failed.emit(str(exc))
 
 
 class MediaTaskWorker(QThread):
@@ -127,24 +94,42 @@ class MediaTaskWorker(QThread):
             ffprobe_path = self.settings.get("ffprobe_path") or None
             if self.task["kind"] == "music":
                 outputs = run_music_download(
-                    self.task.get("query") or self.task.get("url") or "", self.task["output_dir"],
-                    self.cancel_event, self._progress, self._log, ffmpeg_path,
-                    self.task.get("music_track"), self.settings,
+                    self.task.get("query") or self.task.get("url") or "",
+                    self.task["output_dir"],
+                    self.cancel_event,
+                    self._progress,
+                    self._log,
+                    ffmpeg_path,
+                    self.task.get("music_track"),
+                    self.settings,
                 )
             elif self.task["kind"] == "download":
                 outputs = download_and_process(
-                    self.task["url"], self.task["output_dir"], options, task_id,
-                    self.cancel_event, self._progress, self._log,
-                    ffmpeg_path, ffprobe_path, self.settings,
+                    self.task["url"],
+                    self.task["output_dir"],
+                    options,
+                    task_id,
+                    self.cancel_event,
+                    self._progress,
+                    self._log,
+                    ffmpeg_path,
+                    ffprobe_path,
+                    self.settings,
                 )
             else:
                 output = convert_file(
-                    self.task["source"], self.task["output_dir"], options, task_id,
-                    self.cancel_event, self._progress, self._log,
-                    ffmpeg_path, ffprobe_path,
+                    self.task["source"],
+                    self.task["output_dir"],
+                    options,
+                    task_id,
+                    self.cancel_event,
+                    self._progress,
+                    self._log,
+                    ffmpeg_path,
+                    ffprobe_path,
                 )
                 outputs = [output]
-            self.completed.emit(task_id, "Completed", [str(p) for p in outputs], "")
+            self.completed.emit(task_id, "Completed", [str(path) for path in outputs], "")
         except CancelledError as exc:
             self.completed.emit(task_id, "Cancelled", [], str(exc))
         except Exception as exc:
