@@ -2648,7 +2648,7 @@ ApplicationWindow {
                     color: themeColors.activeBg
                     Icon {
                         anchors.centerIn: parent
-                        name: "scan-search"
+                        name: "search"
                         color: themeColors.lime
                         implicitWidth: 20
                         implicitHeight: 20
@@ -2775,7 +2775,7 @@ ApplicationWindow {
                         radius: 15
                         color: "#2b1716"
                         Layout.alignment: Qt.AlignHCenter
-                        Icon { anchors.centerIn: parent; name: "alert-triangle"; color: themeColors.danger; implicitWidth: 24; implicitHeight: 24 }
+                        Icon { anchors.centerIn: parent; name: "alert"; color: themeColors.danger; implicitWidth: 24; implicitHeight: 24 }
                     }
                     Text {
                         text: "Analysis failed"
