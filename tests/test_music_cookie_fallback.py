@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from ums.music import (
     _extract_info_with_cookie_fallback,
@@ -51,7 +52,7 @@ class BrowserCookieFallbackTests(unittest.TestCase):
         state = {"used": False}
 
         result = _extract_info_with_cookie_fallback(
-            FakeYoutubeDL,
+            SimpleNamespace(YoutubeDL=FakeYoutubeDL),
             search_options,
             "ytsearch5:test",
             related_options=(download_options,),
@@ -83,7 +84,7 @@ class BrowserCookieFallbackTests(unittest.TestCase):
         options = {"cookiesfrombrowser": ("brave", "Profile 1")}
         with self.assertRaisesRegex(RuntimeError, "Sign in"):
             _extract_info_with_cookie_fallback(
-                FakeYoutubeDL, options, "https://youtube.com/watch?v=test"
+                SimpleNamespace(YoutubeDL=FakeYoutubeDL), options, "https://youtube.com/watch?v=test"
             )
         self.assertIn("cookiesfrombrowser", options)
 
