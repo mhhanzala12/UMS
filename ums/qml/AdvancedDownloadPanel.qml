@@ -9,6 +9,7 @@ ColumnLayout {
     property var presets: ({})
     property string selectedPreset: "Best Available Quality"
     property bool expanded: false
+    property bool showSourceQuality: true
 
     signal presetChanged(string name)
     signal savePresetRequested(string optionsJson)
@@ -181,7 +182,7 @@ ColumnLayout {
     }
 
     Rectangle {
-        visible: root.expanded
+        visible: root.expanded && root.showSourceQuality
         Layout.fillWidth: true
         implicitHeight: sourceColumn.implicitHeight + 28
         radius: 12
