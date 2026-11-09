@@ -198,22 +198,25 @@ def tool_status(ffmpeg_path: Optional[str] = None, ffprobe_path: Optional[str] =
 
 
 def _thumbnail_candidates(info: dict) -> list[str]:
-    """Return unique thumbnail URLs, preferring the largest known image."""
+    """Return unique thumbnail URLs, preferring larger advertised images."""
     rows = []
     for item in info.get("thumbnails") or []:
         if not isinstance(item, dict) or not item.get("url"):
             continue
         try:
-            width = int(item.get("width") or 0)
-            height = int(item.get("height") or 0)
+            width = max(0, int(item.get("width") or 0))
+            height = max(0, int(item.get("height") or 0))
             preference = int(item.get("preference") or 0)
         except (TypeError, ValueError, OverflowError):
             width = height = preference = 0
-        rows.append((preference, width * height, str(item["url"])))
+        rows.append((width * height, preference, str(item["url"])))
+    # Pixel area is the strongest useful signal; provider preference breaks ties.
     rows.sort(key=lambda row: (row[0], row[1]), reverse=True)
 
-    primary = info.get("thumbnail")
-    ordered = ([str(primary)] if primary else []) + [row[2] for row in rows]
+    ordered = [row[2] for row in rows]
+    primary = str(info.get("thumbnail") or "").strip()
+    if primary and primary not in ordered:
+        ordered.append(primary)
     unique = []
     seen = set()
     for url in ordered:
@@ -223,34 +226,44 @@ def _thumbnail_candidates(info: dict) -> list[str]:
     return unique[:8]
 
 
-def _download_thumbnail_data(url: str, timeout: float = 4.0,
+def _download_thumbnail_data(url: str, timeout: float = 3.5,
                              max_bytes: int = 4 * 1024 * 1024) -> bytes:
-    """Fetch a small thumbnail for the legacy Widgets preview, without blocking the GUI.
-
-    This is called from AnalyzeWorker's background thread. The response is size
-    limited and non-image responses are ignored. QML consumes the URL separately.
-    """
+    """Fetch a bounded raster thumbnail preview on the analysis worker thread."""
     url = str(url or "").strip()
     if not is_http_url(url):
         return b""
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "UniversalMediaStudio/1.0 (+thumbnail preview)"},
+        headers={"User-Agent": "Mozilla/5.0 UniversalMediaStudio/1.0"},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            content_type = str(response.headers.get("Content-Type") or "").lower()
+            content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].lower()
             if content_type and not content_type.startswith("image/"):
                 return b""
             data = response.read(max_bytes + 1)
-            if len(data) > max_bytes:
-                _LOG.debug("Skipped oversized media thumbnail (%s bytes)", len(data))
+            if not data or len(data) > max_bytes:
+                _LOG.debug("Skipped empty or oversized media thumbnail (%s bytes)", len(data))
                 return b""
-            return data
+            signature_ok = (
+                data.startswith(bytes((255, 216, 255)))  # JPEG
+                or data.startswith(bytes((137, 80, 78, 71, 13, 10, 26, 10)))  # PNG
+                or (data.startswith(b"RIFF") and data[8:12] == b"WEBP")
+                or data.startswith((b"GIF87a", b"GIF89a"))
+            )
+            return data if signature_ok else b""
     except Exception as exc:
-        # A preview is optional metadata; a CDN error must never fail analysis.
-        _LOG.debug("Thumbnail preview download failed: %s", exc)
+        _LOG.debug("Thumbnail preview download failed for %s: %s", url, exc)
         return b""
+
+
+def _download_thumbnail_candidates(urls: list[str], max_candidates: int = 4) -> bytes:
+    """Try several thumbnail variants so one stale CDN URL does not hide the preview."""
+    for url in (urls or [])[:max_candidates]:
+        data = _download_thumbnail_data(url)
+        if data:
+            return data
+    return b""
 
 
 def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settings: Optional[dict] = None) -> dict:
@@ -285,39 +298,77 @@ def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settin
     for f in info.get("formats") or []:
         if not f.get("url"):
             continue
+        width = f.get("width")
         height = f.get("height")
         fps = f.get("fps")
         size = f.get("filesize") or f.get("filesize_approx")
         formats.append({
             "format_id": str(f.get("format_id", "?")),
             "ext": str(f.get("ext", "?")),
-            "resolution": f.get("resolution") or (f"{height}p" if height else "audio / unknown"),
+            "resolution": f.get("resolution") or (
+                f"{width}x{height}" if width and height else
+                (f"{height}p" if height else "audio only")
+            ),
+            "width": width,
             "height": height,
             "fps": fps,
             "vcodec": f.get("vcodec"),
             "acodec": f.get("acodec"),
             "filesize": size,
+            "tbr": f.get("tbr"),
+            "abr": f.get("abr"),
             "note": str(f.get("format_note") or ""),
             "format": str(f.get("format") or ""),
         })
-    # The UI displays the first formats, so put the best resolution / frame rate
-    # first rather than hiding the useful choices below a dozen low-quality rows.
-    formats.sort(
-        key=lambda x: (
-            x.get("height") or 0,
-            x.get("fps") or 0,
-            x.get("filesize") or 0,
-            x["format_id"],
-        ),
-        reverse=True,
-    )
+
+    def has_codec(value):
+        return bool(value) and str(value).lower() != "none"
+
+    def format_rank(row, video=False):
+        try:
+            height_value = float(row.get("height") or 0)
+            fps_value = float(row.get("fps") or 0)
+            bitrate_value = float(row.get("tbr") or row.get("abr") or 0)
+            size_value = float(row.get("filesize") or 0)
+        except (TypeError, ValueError, OverflowError):
+            height_value = fps_value = bitrate_value = size_value = 0
+        return (
+            height_value if video else 0,
+            fps_value if video else 0,
+            bitrate_value,
+            size_value,
+            str(row.get("format_id") or ""),
+        )
+
+    # Many extractors expose separate video and audio streams and leave the
+    # selected-format summary fields blank until a format is chosen. Derive a
+    # useful preview summary from the best available source streams.
+    formats.sort(key=lambda row: format_rank(row, has_codec(row.get("vcodec"))), reverse=True)
+    video_formats = [row for row in formats if has_codec(row.get("vcodec"))]
+    audio_formats = [row for row in formats if has_codec(row.get("acodec"))]
+    combined_formats = [
+        row for row in formats
+        if has_codec(row.get("vcodec")) and has_codec(row.get("acodec"))
+    ]
+    best_video = max(video_formats, key=lambda row: format_rank(row, True), default={})
+    best_audio = max(audio_formats, key=lambda row: format_rank(row), default={})
+    best_combined = max(combined_formats, key=lambda row: format_rank(row, True), default={})
+
     thumbnails = _thumbnail_candidates(info)
+    thumbnail_data = _download_thumbnail_candidates(thumbnails)
     upload_date = info.get("upload_date") or info.get("release_date") or ""
-    width = info.get("width")
-    height = info.get("height")
+    width = info.get("width") or best_video.get("width")
+    height = info.get("height") or best_video.get("height")
     resolution = info.get("resolution") or (
-        f"{width}x{height}" if width and height else ""
+        f"{width}x{height}" if width and height else best_video.get("resolution") or ""
     )
+    top_vcodec = info.get("vcodec")
+    top_acodec = info.get("acodec")
+    if not has_codec(top_vcodec):
+        top_vcodec = best_video.get("vcodec") or ""
+    if not has_codec(top_acodec):
+        top_acodec = best_combined.get("acodec") or best_audio.get("acodec") or ""
+    summary_format = best_combined or best_video or best_audio
     return {
         "id": str(info.get("id") or ""),
         "extractor": str(info.get("extractor_key") or info.get("extractor") or ""),
@@ -325,7 +376,7 @@ def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settin
         "description": str(info.get("description") or "")[:12000],
         "duration": info.get("duration"),
         "thumbnail": thumbnails[0] if thumbnails else "",
-        "thumbnail_data": _download_thumbnail_data(thumbnails[0]) if thumbnails else b"",
+        "thumbnail_data": thumbnail_data,
         "thumbnails": thumbnails,
         "uploader": str(info.get("uploader") or info.get("channel") or info.get("creator") or info.get("artist") or ""),
         "channel": str(info.get("channel") or info.get("uploader") or ""),
@@ -343,16 +394,18 @@ def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settin
         "categories": [str(value) for value in (info.get("categories") or [])][:20],
         "tags": [str(value) for value in (info.get("tags") or [])][:40],
         "webpage_url": str(info.get("webpage_url") or url),
-        "format": str(info.get("format") or ""),
-        "format_id": str(info.get("format_id") or ""),
-        "ext": str(info.get("ext") or ""),
+        "format": str(info.get("format") or summary_format.get("format") or ""),
+        "format_id": str(info.get("format_id") or summary_format.get("format_id") or ""),
+        "ext": str(info.get("ext") or summary_format.get("ext") or ""),
         "resolution": str(resolution or ""),
         "width": width,
         "height": height,
-        "fps": info.get("fps"),
-        "filesize": info.get("filesize") or info.get("filesize_approx"),
-        "vcodec": str(info.get("vcodec") or ""),
-        "acodec": str(info.get("acodec") or ""),
+        "fps": info.get("fps") or best_video.get("fps"),
+        "filesize": info.get("filesize") or info.get("filesize_approx") or summary_format.get("filesize"),
+        "vcodec": str(top_vcodec or ""),
+        "acodec": str(top_acodec or ""),
+        "best_video_format": dict(best_video),
+        "best_audio_format": dict(best_audio),
         "formats": formats,
         "subtitles": sorted((info.get("subtitles") or {}).keys()),
         "automatic_captions": sorted((info.get("automatic_captions") or {}).keys()),
