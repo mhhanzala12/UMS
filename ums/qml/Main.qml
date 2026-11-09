@@ -2693,7 +2693,7 @@ ApplicationWindow {
                     visible: !window.analysisBusy && window.analysisError.length === 0 && !!window.analysisData.title
                     ScrollBar.vertical: ScrollBar { active: true }
                     ColumnLayout {
-                        width: Math.max(implicitWidth, parent.width - 12)
+                        width: parent.width
                         spacing: 13
                         RowLayout {
                             Layout.fillWidth: true
