@@ -184,9 +184,11 @@ class WebMCompatibilityTests(unittest.TestCase):
             ],
             "formats": [
                 {"url": "https://example.com/low", "format_id": "low", "width": 426, "height": 240,
-                 "fps": 25, "ext": "mp4", "filesize": 500_000, "vcodec": "h264", "acodec": "aac"},
+                 "fps": 25, "ext": "mp4", "filesize": 500_000, "vcodec": "h264", "acodec": "none"},
                 {"url": "https://example.com/high", "format_id": "high", "width": 1920, "height": 1080,
                  "fps": 60, "ext": "mp4", "vcodec": "h264", "acodec": "none"},
+                {"url": "https://example.com/audio", "format_id": "audio", "ext": "m4a",
+                 "abr": 128, "filesize": 120_000, "vcodec": "none", "acodec": "aac"},
             ],
         }
 
