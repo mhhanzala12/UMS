@@ -68,6 +68,7 @@ class LegacyPresetTests(unittest.TestCase):
     @patch("ums.engine._source_stream_codecs", return_value={"video": "h264", "audio": "aac"})
     def test_webm_explicit_incompatible_codecs_are_normalised(self, _source_codecs, _encoders):
         options = {
+            "container": "webm",
             "video_codec": "h264",
             "audio_codec": "aac",
             "video_encoder": "libx264",
