@@ -768,9 +768,28 @@ def _source_stream_codecs(source: Path, ffprobe: Optional[str]) -> Optional[dict
 
 
 def _normalise_webm_options(source: Path, options: dict, ffprobe: Optional[str],
-                            ffmpeg: str, log_cb=None) -> dict:
-    """Choose only WebM-safe codecs, retaining copy only after a successful probe."""
+                            ffmpeg: str, log_cb=None, force_reencode: bool = False) -> dict:
+    """Choose only WebM-safe codecs, retaining copy only after a successful probe.
+
+    force_reencode is the recovery path for source files whose codec tags still
+    fail the WebM muxer's final validation despite an initial successful probe.
+    """
     adjusted = dict(options or {})
+    if force_reencode:
+        adjusted.update({
+            "video_codec": "vp9",
+            "audio_codec": "opus",
+            "video_encoder": "Auto",
+            "profile": "",
+            "level": "",
+            "rate_control": "CRF",
+            "crf": "32",
+            "video_bitrate": "",
+            "pixel_format": "yuv420p",
+            "embed_subtitles": False,
+        })
+        adjusted.pop("_webm_video_copy_safe", None)
+        adjusted.pop("_webm_audio_copy_safe", None)
     codecs = _source_stream_codecs(source, ffprobe)
     video_choice = str(adjusted.get("video_codec") or "copy").lower()
     audio_choice = str(adjusted.get("audio_codec") or "copy").lower()
@@ -984,7 +1003,35 @@ def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg
                 duration = None
         processing = target.with_name(target.stem + ".processing" + target.suffix)
         try:
-            _run_ffmpeg(source, processing, options, ffmpeg, cancel_event, progress_cb, duration, subtitle_files)
+            try:
+                _run_ffmpeg(source, processing, options, ffmpeg, cancel_event, progress_cb, duration, subtitle_files)
+            except MediaError as first_error:
+                error_text = str(first_error).casefold()
+                webm_muxer_rejected_codecs = (
+                    container == "webm"
+                    and (
+                        "only vp8 or vp9 or av1 video" in error_text
+                        or (
+                            "could not write header" in error_text
+                            and "invalid argument" in error_text
+                        )
+                    )
+                )
+                if not webm_muxer_rejected_codecs:
+                    raise
+                if log_cb:
+                    log_cb(
+                        "The WebM muxer rejected the selected stream combination; "
+                        "retrying with WebM-safe VP9/Opus encoding."
+                    )
+                processing.unlink(missing_ok=True)
+                options = _normalise_webm_options(
+                    source, options, ffprobe, ffmpeg, log_cb, force_reencode=True
+                )
+                _run_ffmpeg(
+                    source, processing, options, ffmpeg,
+                    cancel_event, progress_cb, duration, subtitle_files,
+                )
             if not processing.exists() or processing.stat().st_size == 0:
                 raise MediaError("FFmpeg did not produce a non-empty output file.")
             processing.replace(target)
