@@ -243,16 +243,30 @@ def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settin
             "format": f.get("format") or "",
         })
     formats.sort(key=lambda x: (x.get("height") or 0, x.get("fps") or 0, x["format_id"]))
+    upload_date = info.get("upload_date") or info.get("release_date") or ""
     return {
+        "id": str(info.get("id") or ""),
+        "extractor": str(info.get("extractor_key") or info.get("extractor") or ""),
         "title": info.get("title") or "Untitled media",
+        "description": info.get("description") or "",
         "duration": info.get("duration"),
-        "thumbnail": info.get("thumbnail"),
+        "thumbnail": info.get("thumbnail") or "",
         "uploader": info.get("uploader") or info.get("channel") or "",
+        "channel": info.get("channel") or info.get("uploader") or "",
+        "channel_url": info.get("channel_url") or info.get("uploader_url") or "",
+        "upload_date": str(upload_date),
+        "release_date": str(info.get("release_date") or ""),
+        "view_count": info.get("view_count"),
+        "like_count": info.get("like_count"),
+        "comment_count": info.get("comment_count"),
+        "categories": list(info.get("categories") or [])[:20],
+        "tags": list(info.get("tags") or [])[:40],
         "webpage_url": info.get("webpage_url") or url,
         "formats": formats,
         "subtitles": sorted((info.get("subtitles") or {}).keys()),
         "automatic_captions": sorted((info.get("automatic_captions") or {}).keys()),
         "is_live": bool(info.get("is_live")),
+        "live_status": str(info.get("live_status") or ""),
     }
 
 
@@ -374,8 +388,9 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
                     # MPEG-4 Part 2 / MPEG-2 use qscale; this is an approximate mapping.
                     quality = max(2, min(31, round(int(crf) * 31 / 63)))
                     cmd += ["-q:v", str(quality)]
-                elif rate_control == "CQ" and encoder in {"libvpx", "libvpx-vp9"}:
-                    cmd += ["-b:v", "0", "-crf", crf]
+                elif encoder in {"libvpx", "libvpx-vp9"}:
+                    # libvpx uses a zero bitrate target for constant-quality CRF.
+                    cmd += ["-b:v", vbitrate or "0", "-crf", crf]
                 else:
                     cmd += ["-crf", crf]
                 if rate_control == "CQ" and vbitrate and not encoder.endswith(("_nvenc", "_qsv", "_amf")) and encoder not in {"libvpx", "libvpx-vp9"}:
@@ -410,7 +425,15 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
                 cmd += ["-preset", nvenc_preset]
             elif encoder.endswith("_amf"):
                 cmd += ["-quality", "speed" if preset in {"ultrafast", "superfast", "veryfast", "faster", "fast"} else ("quality" if preset in {"slower", "veryslow", "placebo"} else "balanced")]
-            elif encoder in {"libx264", "libx265", "libvpx", "libvpx-vp9", "h264_qsv", "hevc_qsv"}:
+            elif encoder in {"libvpx", "libvpx-vp9"}:
+                cpu_used = {
+                    "ultrafast": "8", "superfast": "7", "veryfast": "6",
+                    "faster": "5", "fast": "4", "medium": "3",
+                    "slow": "2", "slower": "1", "veryslow": "0",
+                    "placebo": "0",
+                }.get(preset, "3")
+                cmd += ["-deadline", "good", "-cpu-used", cpu_used]
+            elif encoder in {"libx264", "libx265", "h264_qsv", "hevc_qsv"}:
                 cmd += ["-preset", preset]
 
             profile = str(options.get("profile") or "").strip()
@@ -474,7 +497,11 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
     if options.get("embed_subtitles") and subtitle_files and not is_audio:
         for idx, _sub in enumerate(subtitle_files, start=1):
             cmd += ["-map", f"{idx}:0?"]
-        subtitle_codec = "mov_text" if container in {"mp4", "m4v", "mov", "3gp"} else "copy"
+        subtitle_codec = (
+            "mov_text" if container in {"mp4", "m4v", "mov", "3gp"}
+            else "webvtt" if container == "webm"
+            else "copy"
+        )
         cmd += ["-c:s", subtitle_codec]
     cmd += ["-movflags", "+faststart"] if container in {"mp4", "m4v", "mov"} else []
     cmd += ["-progress", "pipe:1", "-nostats", str(target)]
@@ -555,6 +582,106 @@ def _run_ffmpeg(source: Path, target: Path, options: dict, ffmpeg: str,
         _terminate(proc)
 
 
+def _source_stream_codecs(source: Path, ffprobe: Optional[str]) -> Optional[dict]:
+    """Return the first source video/audio codec names, or None when probing fails."""
+    if not ffprobe:
+        return None
+    try:
+        proc = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries",
+             "stream=codec_type,codec_name", "-of", "json", str(source)],
+            capture_output=True, text=True, timeout=12, **_NO_WINDOW,
+        )
+        if proc.returncode != 0:
+            return None
+        streams = json.loads(proc.stdout or "{}").get("streams") or []
+        result = {"video": None, "audio": None}
+        for stream in streams:
+            kind = stream.get("codec_type")
+            if kind in result and not result[kind]:
+                result[kind] = str(stream.get("codec_name") or "").lower() or None
+        return result
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return None
+
+
+def _normalise_webm_options(source: Path, options: dict, ffprobe: Optional[str],
+                            ffmpeg: str, log_cb=None) -> dict:
+    """Ensure a WebM mux never receives H.264/AAC or other unsupported streams.
+
+    WebM supports VP8/VP9/AV1 video, Opus/Vorbis audio, and WebVTT subtitles.
+    Copy is preserved only when ffprobe confirms the source streams are valid.
+    """
+    adjusted = dict(options)
+    codecs = _source_stream_codecs(source, ffprobe)
+    video_choice = str(adjusted.get("video_codec") or "copy").lower()
+    audio_choice = str(adjusted.get("audio_codec") or "copy").lower()
+    video_allowed = {"vp8", "vp9", "av1"}
+    audio_allowed = {"opus", "vorbis"}
+    changes = []
+
+    available = set(list_encoders(ffmpeg))
+    if video_choice == "copy":
+        source_video = (codecs or {}).get("video")
+        source_video_allowed = {"vp8", "vp9", "av1"}
+        needs_video_encode = (
+            not ffprobe or codecs is None or
+            (source_video is not None and source_video not in source_video_allowed)
+        )
+    else:
+        needs_video_encode = video_choice not in video_allowed
+
+    if needs_video_encode:
+        if "libvpx-vp9" in available or not available:
+            video_choice = "vp9"
+        elif "libvpx" in available:
+            video_choice = "vp8"
+        elif "libaom-av1" in available:
+            video_choice = "av1"
+        else:
+            raise MediaError(
+                "WebM output needs a VP8, VP9, or AV1 encoder. "
+                "Install an FFmpeg build with libvpx-vp9 (recommended), libvpx, or libaom-av1."
+            )
+        adjusted["video_codec"] = video_choice
+        adjusted["video_encoder"] = "Auto"
+        adjusted["profile"] = ""
+        adjusted["level"] = ""
+        rate_control = str(adjusted.get("rate_control") or "Source").upper()
+        if rate_control not in {"CRF", "CQ", "CBR", "VBR"}:
+            adjusted["rate_control"] = "CRF"
+            adjusted["crf"] = "32"
+            adjusted["video_bitrate"] = ""
+        changes.append(f"video → {video_choice.upper()}")
+
+    if audio_choice == "copy":
+        source_audio = (codecs or {}).get("audio")
+        source_audio_allowed = {"opus", "vorbis"}
+        needs_audio_encode = (
+            not ffprobe or codecs is None or
+            (source_audio is not None and source_audio not in source_audio_allowed)
+        )
+    else:
+        needs_audio_encode = audio_choice not in audio_allowed
+
+    if needs_audio_encode:
+        if "libopus" in available or not available:
+            audio_choice = "opus"
+        elif "libvorbis" in available:
+            audio_choice = "vorbis"
+        else:
+            raise MediaError(
+                "WebM output needs an Opus or Vorbis audio encoder. "
+                "Install an FFmpeg build with libopus or libvorbis."
+            )
+        adjusted["audio_codec"] = audio_choice
+        changes.append(f"audio → {audio_choice.upper()}")
+
+    if changes and log_cb:
+        log_cb("WebM compatibility: adjusted unsupported stream settings (" + ", ".join(changes) + ").")
+    return adjusted
+
+
 def _probe(path: Path, ffprobe: Optional[str]) -> dict:
     if not ffprobe:
         return {"validated": False, "message": "ffprobe not found; output received a basic file-size check only."}
@@ -589,6 +716,11 @@ def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg
     target = _unique_path(output_dir / f"{stem}{suffix}")
     ffmpeg = _which("ffmpeg", ffmpeg_path)
     ffprobe = _which("ffprobe", ffprobe_path)
+    options = dict(options or {})
+    if container == "webm":
+        if not ffmpeg:
+            raise MediaError("FFmpeg is required to create WebM output. Install FFmpeg and make sure ffmpeg is on PATH.")
+        options = _normalise_webm_options(source, options, ffprobe, ffmpeg, log_cb)
     wants_edit = (
         container != "original" or
         (options.get("video_codec", "copy").lower() != "copy" and not audio_only) or
