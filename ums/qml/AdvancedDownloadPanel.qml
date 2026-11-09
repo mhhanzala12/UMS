@@ -129,11 +129,7 @@ ColumnLayout {
                         Layout.fillWidth: true
                         model: Object.keys(root.presets || {})
                         currentIndex: Math.max(0, model.indexOf(root.selectedPreset))
-                        onActivated: {
-                            root.selectedPreset = currentText
-                            root.applyPreset(currentText, root.presets[currentText])
-                            root.presetChanged(currentText)
-                        }
+                        onActivated: root.presetChanged(currentText)
                         palette.text: root.palette.text || "#e9ece4"
                         palette.buttonText: root.palette.text || "#e9ece4"
                         palette.base: root.palette.panel2 || "#171b13"
