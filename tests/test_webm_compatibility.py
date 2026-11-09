@@ -111,11 +111,13 @@ class WebMCompatibilityTests(unittest.TestCase):
                 return info
 
         fake_module = types.SimpleNamespace(YoutubeDL=FakeYoutubeDL)
-        with patch.dict(sys.modules, {"yt_dlp": fake_module}):
+        with patch.dict(sys.modules, {"yt_dlp": fake_module}), \
+             patch("ums.engine._download_thumbnail_data", return_value=b"preview-bytes"):
             data = analyze_url("https://example.com/watch/abc")
 
         self.assertEqual(data["formats"][0]["format_id"], "high")
         self.assertEqual(data["thumbnail"], "https://example.com/large.jpg")
+        self.assertEqual(data["thumbnail_data"], b"preview-bytes")
         self.assertEqual(data["thumbnails"][0], data["thumbnail"])
         self.assertEqual(data["title"], "Test title")
 
