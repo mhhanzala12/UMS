@@ -82,6 +82,15 @@ class WebMCompatibilityTests(unittest.TestCase):
                 ]},
             })
 
+    def test_thumbnail_cdn_failure_does_not_fail_analysis(self):
+        from ums.engine import _download_thumbnail_data
+
+        with patch("ums.engine.urllib.request.urlopen", side_effect=OSError("CDN unavailable")):
+            self.assertEqual(
+                _download_thumbnail_data("https://example.com/preview.jpg"),
+                b"",
+            )
+
     def test_analysis_prefers_best_formats_and_thumbnail_fallbacks(self):
         info = {
             "id": "abc",
