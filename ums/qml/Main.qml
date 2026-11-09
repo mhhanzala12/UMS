@@ -2845,7 +2845,7 @@ ApplicationWindow {
                             radius: 13
                             color: themeColors.panel2
                             border.color: themeColors.border
-                            implicitHeight: 190
+                            implicitHeight: 204
                             clip: true
 
                             RowLayout {
@@ -3007,7 +3007,7 @@ ApplicationWindow {
                                 model: [
                                     {label: "DURATION", value: window.analysisData.is_live ? "Live" : window.formatMediaDuration(window.analysisData.duration)},
                                     {label: "RESOLUTION", value: window.analysisData.resolution || "—"},
-                                    {label: "FRAME RATE", value: Number(window.analysisData.fps) > 0 ? Number(window.analysisData.fps).toFixed(2).replace(/\\.00$/, "") + " FPS" : "—"},
+                                    {label: "FRAME RATE", value: Number(window.analysisData.fps) > 0 ? Number(window.analysisData.fps).toFixed(2).replace(/\.00$/, "") + " FPS" : "—"},
                                     {label: "VIEWS", value: window.displayCount(window.analysisData.view_count)},
                                     {label: "LIKES", value: window.displayCount(window.analysisData.like_count)},
                                     {label: "PUBLISHED", value: window.displayMediaDate(window.analysisData.upload_date || window.analysisData.release_date)},
