@@ -87,7 +87,10 @@ ApplicationWindow {
     property var selectedTrack: ({})
     property bool analysisBusy: false
     property string analysisError: ""
+    property string analysisTargetUrl: ""
     property var analysisData: ({})
+    property var analysisThumbnailList: []
+    property int analysisThumbnailIndex: 0
     property string lyricsTitle: ""
     property string lyricsArtist: ""
     property string lyricsRequestedTitle: ""
@@ -119,6 +122,27 @@ ApplicationWindow {
         return date.length === 8 && /^\d{8}$/.test(date)
                 ? date.slice(0, 4) + "-" + date.slice(4, 6) + "-" + date.slice(6, 8)
                 : (date || "—")
+    }
+    function displayMediaSize(value) {
+        var bytes = Number(value)
+        if (!isFinite(bytes) || bytes <= 0) return "—"
+        var units = ["B", "KB", "MB", "GB", "TB"]
+        var index = 0
+        while (bytes >= 1024 && index < units.length - 1) {
+            bytes /= 1024
+            index++
+        }
+        return (index === 0 ? Math.round(bytes) : bytes.toFixed(bytes >= 100 ? 0 : 1)) + " " + units[index]
+    }
+    function buildAnalysisThumbnailList(data) {
+        var urls = []
+        if (data && data.thumbnail) urls.push(String(data.thumbnail))
+        var variants = data && data.thumbnails ? data.thumbnails : []
+        for (var i = 0; i < variants.length; i++) {
+            var value = typeof variants[i] === "string" ? variants[i] : variants[i].url
+            if (value && urls.indexOf(String(value)) < 0) urls.push(String(value))
+        }
+        return urls
     }
     function normalizeTrackText(value) {
         return String(value || "").toLowerCase()
@@ -370,17 +394,23 @@ ApplicationWindow {
         function onAnalysisReady(value) {
             try {
                 analysisData = JSON.parse(value)
+                analysisThumbnailList = buildAnalysisThumbnailList(analysisData)
+                analysisThumbnailIndex = 0
                 analysisError = ""
                 analysisBusy = false
                 analysisDialog.open()
             } catch (error) {
+                analysisData = ({})
+                analysisThumbnailList = []
                 analysisBusy = false
-                analysisError = "The source returned invalid metadata. Please try analyzing the URL again."
+                analysisError = "The source returned invalid metadata. Please analyze the URL again."
                 analysisDialog.open()
             }
         }
         function onAnalysisFailed(value) {
             analysisBusy = false
+            analysisData = ({})
+            analysisThumbnailList = []
             analysisError = String(value || "The source could not be analyzed.")
             analysisDialog.open()
         }
@@ -1544,14 +1574,25 @@ ApplicationWindow {
                         RowLayout {
                             Layout.fillWidth: true; spacing: 10
                             Button {
-                                text: "Analyze URL"
+                                text: window.analysisBusy ? "Analyzing…" : "Analyze URL"
+                                enabled: !window.analysisBusy
                                 onClicked: {
                                     var urls = downloadUrls.text.split(/\r?\n/).map(function(v){return v.trim()}).filter(function(v){return v.length})
-                                    if (urls.length) bridge.analyzeUrl(urls[0], "download")
-                                    else toast.showMessage("Paste a media URL first.", true)
+                                    if (!urls.length) {
+                                        toast.showMessage("Paste a media URL first.", true)
+                                        return
+                                    }
+                                    window.analysisTargetUrl = urls[0]
+                                    window.analysisBusy = true
+                                    window.analysisError = ""
+                                    window.analysisData = ({})
+                                    window.analysisThumbnailList = []
+                                    window.analysisThumbnailIndex = 0
+                                    analysisDialog.open()
+                                    bridge.analyzeUrl(urls[0], "download")
                                 }
-                                background: Rectangle { radius: 8; color: themeColors.panel2; border.color: themeColors.border }
-                                contentItem: Text { text: parent.text; color: themeColors.text; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; padding: 8 }
+                                background: Rectangle { radius: 8; color: parent.enabled ? themeColors.panel2 : themeColors.panel3; border.color: parent.enabled ? themeColors.border : "transparent" }
+                                contentItem: Text { text: parent.text; color: parent.enabled ? themeColors.text : themeColors.subtle; font.pixelSize: 10; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; padding: 8 }
                             }
                             Item { Layout.fillWidth: true }
                             Button {
@@ -2579,10 +2620,10 @@ ApplicationWindow {
     Dialog {
         id: analysisDialog
         modal: true
+        parent: Overlay.overlay
         anchors.centerIn: parent
-        width: Math.min(900, window.width - 48)
-        height: Math.min(740, window.height - 48)
-        title: "Analyze URL"
+        width: Math.min(1000, window.width - 40)
+        height: Math.min(760, window.height - 40)
         padding: 0
         standardButtons: Dialog.NoButton
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -2591,79 +2632,131 @@ ApplicationWindow {
             radius: 16
             border.color: themeColors.border
         }
+
         contentItem: ColumnLayout {
             spacing: 0
+
             RowLayout {
                 Layout.fillWidth: true
-                Layout.margins: 20
+                Layout.margins: 18
                 spacing: 12
+
+                Rectangle {
+                    Layout.preferredWidth: 42
+                    Layout.preferredHeight: 42
+                    radius: 11
+                    color: themeColors.activeBg
+                    Icon {
+                        anchors.centerIn: parent
+                        name: "scan-search"
+                        color: themeColors.lime
+                        implicitWidth: 20
+                        implicitHeight: 20
+                    }
+                }
+
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: 4
+                    spacing: 3
                     Text {
-                        text: "MEDIA ANALYSIS"
+                        text: "MEDIA INSPECTOR"
                         color: themeColors.lime
                         font.pixelSize: 9
-                        font.letterSpacing: 1.4
+                        font.weight: Font.Bold
+                        font.letterSpacing: 1.5
                     }
                     Text {
-                        text: window.analysisBusy ? "Analyzing your URL" : (window.analysisError.length ? "Analysis failed" : "Media information")
+                        text: window.analysisBusy ? "Analyzing URL" :
+                              (window.analysisError.length ? "Couldn’t inspect this source" : "Media information")
                         color: themeColors.text
-                        font.pixelSize: 20
+                        font.pixelSize: 19
                         font.weight: Font.Bold
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
                     Text {
                         text: window.analysisBusy
-                              ? "Reading the media page, available streams, and preview image…"
-                              : (window.analysisError.length ? "The source could not be inspected." :
-                                 (window.analysisData.extractor || "Media source") + " · " + ((window.analysisData.formats || []).length) + " source formats")
+                              ? "Fetching source details and available formats"
+                              : (window.analysisError.length
+                                 ? "Check the URL or try again."
+                                 : (window.analysisData.extractor || "Media source") +
+                                   "  ·  " + (window.analysisData.formats || []).length + " formats found")
                         color: themeColors.muted
-                        font.pixelSize: 11
-                        wrapMode: Text.WordWrap
+                        font.pixelSize: 10
+                        elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
                 }
+
+                Rectangle {
+                    visible: window.analysisBusy
+                    radius: 9
+                    color: themeColors.panel2
+                    border.color: themeColors.border
+                    Layout.preferredWidth: 88
+                    Layout.preferredHeight: 30
+                    RowLayout {
+                        anchors.centerIn: parent
+                        spacing: 6
+                        BusyIndicator {
+                            running: window.analysisBusy
+                            Layout.preferredWidth: 14
+                            Layout.preferredHeight: 14
+                        }
+                        Text { text: "Working"; color: themeColors.muted; font.pixelSize: 10 }
+                    }
+                }
+
                 Btn {
                     text: "Close"
                     icon: "x"
-                    implicitHeight: 34
+                    implicitHeight: 32
                     onClicked: analysisDialog.close()
                 }
             }
+
             Rectangle { Layout.fillWidth: true; height: 1; color: themeColors.border }
 
             Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumHeight: 240
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 20
-                    spacing: 14
+                    anchors.margins: 26
+                    spacing: 12
                     visible: window.analysisBusy
+
                     Item { Layout.fillHeight: true }
                     BusyIndicator {
                         running: window.analysisBusy
+                        Layout.preferredWidth: 54
+                        Layout.preferredHeight: 54
                         Layout.alignment: Qt.AlignHCenter
-                        implicitWidth: 46
-                        implicitHeight: 46
                     }
                     Text {
-                        text: "Fetching metadata and thumbnail"
+                        text: "Getting your media ready"
                         color: themeColors.text
-                        font.pixelSize: 15
+                        font.pixelSize: 16
                         font.weight: Font.DemiBold
                         Layout.alignment: Qt.AlignHCenter
                     }
                     Text {
-                        text: "This usually finishes in a few seconds. The preview is optional, so missing artwork will not block analysis."
+                        text: window.analysisTargetUrl
+                        color: themeColors.subtle
+                        font.pixelSize: 10
+                        elide: Text.ElideMiddle
+                        horizontalAlignment: Text.AlignHCenter
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        text: "The title, channel, thumbnail, stream details and available formats will appear here."
                         color: themeColors.muted
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
-                        Layout.maximumWidth: 440
+                        Layout.maximumWidth: 470
                         Layout.alignment: Qt.AlignHCenter
                     }
                     Item { Layout.fillHeight: true }
@@ -2671,100 +2764,244 @@ ApplicationWindow {
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 18
-                    spacing: 12
+                    anchors.margins: 24
+                    spacing: 13
                     visible: !window.analysisBusy && window.analysisError.length > 0
+
                     Item { Layout.fillHeight: true }
-                    Icon { name: "alert"; color: themeColors.danger; implicitWidth: 28; implicitHeight: 28; Layout.alignment: Qt.AlignHCenter }
+                    Rectangle {
+                        Layout.preferredWidth: 54
+                        Layout.preferredHeight: 54
+                        radius: 15
+                        color: "#2b1716"
+                        Layout.alignment: Qt.AlignHCenter
+                        Icon { anchors.centerIn: parent; name: "alert-triangle"; color: themeColors.danger; implicitWidth: 24; implicitHeight: 24 }
+                    }
+                    Text {
+                        text: "Analysis failed"
+                        color: themeColors.text
+                        font.pixelSize: 17
+                        font.weight: Font.Bold
+                        Layout.alignment: Qt.AlignHCenter
+                    }
                     Text {
                         text: window.analysisError
                         color: themeColors.danger
-                        font.pixelSize: 12
-                        wrapMode: Text.Wrap
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
-                        Layout.fillWidth: true
+                        Layout.maximumWidth: 620
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    RowLayout {
+                        Layout.alignment: Qt.AlignHCenter
+                        spacing: 8
+                        Btn {
+                            text: "Try again"
+                            icon: "refresh"
+                            primary: true
+                            implicitHeight: 34
+                            enabled: window.analysisTargetUrl.length > 0
+                            onClicked: {
+                                window.analysisBusy = true
+                                window.analysisError = ""
+                                window.analysisData = ({})
+                                window.analysisThumbnailList = []
+                                window.analysisThumbnailIndex = 0
+                                bridge.analyzeUrl(window.analysisTargetUrl, "download")
+                            }
+                        }
+                        Btn { text: "Close"; implicitHeight: 34; onClicked: analysisDialog.close() }
                     }
                     Item { Layout.fillHeight: true }
                 }
 
                 ScrollView {
                     anchors.fill: parent
-                    anchors.margins: 18
+                    anchors.margins: 14
                     clip: true
                     visible: !window.analysisBusy && window.analysisError.length === 0 && !!window.analysisData.title
                     ScrollBar.vertical: ScrollBar { active: true }
+
                     ColumnLayout {
                         width: parent.width
-                        spacing: 13
-                        RowLayout {
+                        spacing: 12
+
+                        Rectangle {
                             Layout.fillWidth: true
-                            spacing: 16
-                            Rectangle {
-                                Layout.preferredWidth: 330
-                                Layout.preferredHeight: 186
-                                radius: 10
-                                color: themeColors.panel2
-                                border.color: themeColors.border
-                                clip: true
-                                Image {
-                                    id: preview
-                                    anchors.fill: parent
-                                    source: window.analysisData.thumbnail || ""
-                                    asynchronous: true
-                                    cache: true
-                                    sourceSize.width: 660
-                                    sourceSize.height: 372
-                                    fillMode: Image.PreserveAspectCrop
-                                    visible: status === Image.Ready
+                            radius: 13
+                            color: themeColors.panel2
+                            border.color: themeColors.border
+                            implicitHeight: 190
+                            clip: true
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.margins: 12
+                                spacing: 16
+
+                                Rectangle {
+                                    Layout.preferredWidth: 300
+                                    Layout.preferredHeight: 166
+                                    radius: 9
+                                    color: themeColors.panel3
+                                    border.color: themeColors.border
+                                    clip: true
+
+                                    Image {
+                                        id: preview
+                                        anchors.fill: parent
+                                        source: window.analysisThumbnailList.length > 0
+                                                ? window.analysisThumbnailList[window.analysisThumbnailIndex]
+                                                : (window.analysisData.thumbnail || "")
+                                        asynchronous: true
+                                        cache: true
+                                        sourceSize.width: 900
+                                        sourceSize.height: 506
+                                        fillMode: Image.PreserveAspectCrop
+                                        visible: status === Image.Ready
+                                        onStatusChanged: {
+                                            if (status === Image.Error &&
+                                                window.analysisThumbnailIndex + 1 < window.analysisThumbnailList.length) {
+                                                window.analysisThumbnailIndex++
+                                            }
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        anchors.centerIn: parent
+                                        visible: preview.status !== Image.Ready
+                                        spacing: 7
+                                        Rectangle {
+                                            Layout.preferredWidth: 38
+                                            Layout.preferredHeight: 38
+                                            radius: 11
+                                            color: themeColors.panel2
+                                            Layout.alignment: Qt.AlignHCenter
+                                            Icon { anchors.centerIn: parent; name: "image"; color: themeColors.subtle; implicitWidth: 19; implicitHeight: 19 }
+                                        }
+                                        Text {
+                                            text: preview.status === Image.Loading ? "Loading preview…" : "Preview unavailable"
+                                            color: themeColors.subtle
+                                            font.pixelSize: 10
+                                            Layout.alignment: Qt.AlignHCenter
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        anchors.left: parent.left
+                                        anchors.bottom: parent.bottom
+                                        anchors.margins: 9
+                                        radius: 6
+                                        color: "#b0000000"
+                                        width: sourceBadge.implicitWidth + 14
+                                        height: 23
+                                        Text {
+                                            id: sourceBadge
+                                            anchors.centerIn: parent
+                                            text: window.analysisData.extractor || "MEDIA"
+                                            color: "#ffffff"
+                                            font.pixelSize: 9
+                                            font.weight: Font.Bold
+                                        }
+                                    }
                                 }
+
                                 ColumnLayout {
-                                    anchors.centerIn: parent
-                                    visible: !window.analysisData.thumbnail || preview.status !== Image.Ready
-                                    spacing: 6
-                                    Icon { name: "image"; color: themeColors.subtle; implicitWidth: 25; implicitHeight: 25; Layout.alignment: Qt.AlignHCenter }
-                                    Text { text: preview.status === Image.Loading ? "Loading preview…" : "Preview unavailable"; color: themeColors.subtle; font.pixelSize: 10; Layout.alignment: Qt.AlignHCenter }
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.alignment: Qt.AlignVCenter
+                                    spacing: 8
+
+                                    Text {
+                                        text: window.analysisData.title || "Untitled media"
+                                        color: themeColors.text
+                                        font.pixelSize: 18
+                                        font.weight: Font.Bold
+                                        wrapMode: Text.WordWrap
+                                        maximumLineCount: 3
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Text {
+                                        text: window.analysisData.uploader || window.analysisData.channel ||
+                                              window.analysisData.creator || "Unknown creator"
+                                        color: themeColors.muted
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Text {
+                                        text: window.analysisData.channel_url || window.analysisData.webpage_url || ""
+                                        color: themeColors.subtle
+                                        font.pixelSize: 9
+                                        elide: Text.ElideMiddle
+                                        Layout.fillWidth: true
+                                    }
+
+                                    RowLayout {
+                                        spacing: 7
+                                        Rectangle {
+                                            radius: 6
+                                            color: themeColors.activeBg
+                                            implicitWidth: liveLabel.implicitWidth + 14
+                                            implicitHeight: 23
+                                            Text {
+                                                id: liveLabel
+                                                anchors.centerIn: parent
+                                                text: window.analysisData.is_live ? "LIVE" : (window.analysisData.ext || "MEDIA").toUpperCase()
+                                                color: themeColors.lime
+                                                font.pixelSize: 9
+                                                font.weight: Font.Bold
+                                            }
+                                        }
+                                        Text {
+                                            text: window.analysisData.resolution || "Resolution not supplied"
+                                            color: themeColors.muted
+                                            font.pixelSize: 10
+                                        }
+                                        Text {
+                                            visible: Number(window.analysisData.fps) > 0
+                                            text: "· " + Number(window.analysisData.fps).toFixed(2).replace(/\.00$/, "") + " FPS"
+                                            color: themeColors.muted
+                                            font.pixelSize: 10
+                                        }
+                                    }
                                 }
                             }
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                Layout.alignment: Qt.AlignTop
-                                spacing: 7
-                                Text {
-                                    text: window.analysisData.title || "Untitled media"
-                                    color: themeColors.text
-                                    font.pixelSize: 17
-                                    font.weight: Font.Bold
-                                    wrapMode: Text.WordWrap
-                                    maximumLineCount: 3
-                                    elide: Text.ElideRight
+                        }
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: analysisDialog.width < 760 ? 2 : 4
+                            columnSpacing: 9
+                            rowSpacing: 9
+
+                            Repeater {
+                                model: [
+                                    {label: "DURATION", value: window.analysisData.is_live ? "Live" : window.formatMediaDuration(window.analysisData.duration)},
+                                    {label: "VIEWS", value: window.displayCount(window.analysisData.view_count)},
+                                    {label: "LIKES", value: window.displayCount(window.analysisData.like_count)},
+                                    {label: "PUBLISHED", value: window.displayMediaDate(window.analysisData.upload_date || window.analysisData.release_date)},
+                                    {label: "FILE SIZE", value: window.displayMediaSize(window.analysisData.filesize)},
+                                    {label: "FORMATS", value: String((window.analysisData.formats || []).length)},
+                                    {label: "SUBTITLES", value: String((window.analysisData.subtitles || []).length + (window.analysisData.automatic_captions || []).length)},
+                                    {label: "MEDIA ID", value: window.analysisData.id || "—"}
+                                ]
+                                delegate: Rectangle {
                                     Layout.fillWidth: true
-                                }
-                                Text {
-                                    text: window.analysisData.uploader || window.analysisData.channel || "Unknown uploader"
-                                    color: themeColors.muted
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                    Layout.fillWidth: true
-                                }
-                                GridLayout {
-                                    Layout.fillWidth: true
-                                    columns: 2
-                                    columnSpacing: 16
-                                    rowSpacing: 10
-                                    Repeater {
-                                        model: [
-                                            {label: "DURATION", value: window.analysisData.is_live ? "Live" : window.formatMediaDuration(window.analysisData.duration)},
-                                            {label: "VIEWS", value: window.displayCount(window.analysisData.view_count)},
-                                            {label: "PUBLISHED", value: window.displayMediaDate(window.analysisData.upload_date || window.analysisData.release_date)},
-                                            {label: "LIKES", value: window.displayCount(window.analysisData.like_count)},
-                                            {label: "FORMATS", value: String((window.analysisData.formats || []).length)},
-                                            {label: "SUBTITLES", value: String((window.analysisData.subtitles || []).length + (window.analysisData.automatic_captions || []).length)}
-                                        ]
-                                        delegate: ColumnLayout {
-                                            spacing: 2
-                                            Text { text: modelData.label; color: themeColors.subtle; font.pixelSize: 9; font.weight: Font.Bold }
-                                            Text { text: modelData.value; color: themeColors.text; font.pixelSize: 11; font.weight: Font.DemiBold; elide: Text.ElideRight }
-                                        }
+                                    Layout.preferredHeight: 57
+                                    radius: 9
+                                    color: themeColors.panel2
+                                    border.color: themeColors.border
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 10
+                                        spacing: 4
+                                        Text { text: modelData.label; color: themeColors.subtle; font.pixelSize: 8; font.weight: Font.Bold; font.letterSpacing: 0.7 }
+                                        Text { text: modelData.value; color: themeColors.text; font.pixelSize: 11; font.weight: Font.DemiBold; elide: Text.ElideRight; Layout.fillWidth: true }
                                     }
                                 }
                             }
@@ -2772,7 +3009,7 @@ ApplicationWindow {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            radius: 10
+                            radius: 11
                             color: themeColors.panel2
                             border.color: themeColors.border
                             implicitHeight: descriptionColumn.implicitHeight + 24
@@ -2780,23 +3017,23 @@ ApplicationWindow {
                                 id: descriptionColumn
                                 anchors.fill: parent
                                 anchors.margins: 12
-                                spacing: 6
-                                Text { text: "DESCRIPTION"; color: themeColors.lime; font.pixelSize: 9; font.weight: Font.Bold; font.letterSpacing: 1 }
+                                spacing: 7
+                                Text { text: "DESCRIPTION"; color: themeColors.lime; font.pixelSize: 9; font.weight: Font.Bold; font.letterSpacing: 1.1 }
                                 Text {
                                     Layout.fillWidth: true
-                                    text: window.analysisData.description || "No description supplied."
+                                    text: window.analysisData.description || "No description was supplied by the source."
                                     color: themeColors.muted
                                     font.pixelSize: 11
                                     wrapMode: Text.WordWrap
-                                    maximumLineCount: 7
+                                    maximumLineCount: 6
                                     elide: Text.ElideRight
                                 }
                                 Text {
                                     visible: (window.analysisData.tags || []).length > 0
                                     Layout.fillWidth: true
-                                    text: "Tags: " + (window.analysisData.tags || []).slice(0, 16).join(" · ")
+                                    text: "Tags  ·  " + (window.analysisData.tags || []).slice(0, 20).join("  ·  ")
                                     color: themeColors.subtle
-                                    font.pixelSize: 10
+                                    font.pixelSize: 9
                                     wrapMode: Text.WordWrap
                                     maximumLineCount: 2
                                     elide: Text.ElideRight
@@ -2806,35 +3043,57 @@ ApplicationWindow {
 
                         Rectangle {
                             Layout.fillWidth: true
-                            radius: 10
+                            radius: 11
                             color: themeColors.panel2
                             border.color: themeColors.border
-                            implicitHeight: formatsColumn.implicitHeight + 24
+                            implicitHeight: formatsColumn.implicitHeight + 22
                             ColumnLayout {
                                 id: formatsColumn
                                 anchors.fill: parent
                                 anchors.margins: 12
                                 spacing: 8
-                                Text { text: "AVAILABLE FORMATS"; color: themeColors.lime; font.pixelSize: 9; font.weight: Font.Bold; font.letterSpacing: 1 }
+
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    Text { text: "ID"; color: themeColors.subtle; font.pixelSize: 9; Layout.preferredWidth: 42 }
-                                    Text { text: "TYPE"; color: themeColors.subtle; font.pixelSize: 9; Layout.preferredWidth: 65 }
-                                    Text { text: "RESOLUTION"; color: themeColors.subtle; font.pixelSize: 9; Layout.preferredWidth: 105 }
-                                    Text { text: "FPS"; color: themeColors.subtle; font.pixelSize: 9; Layout.preferredWidth: 42 }
-                                    Text { text: "VIDEO / AUDIO"; color: themeColors.subtle; font.pixelSize: 9; Layout.fillWidth: true }
+                                    Text { text: "AVAILABLE FORMATS"; color: themeColors.lime; font.pixelSize: 9; font.weight: Font.Bold; font.letterSpacing: 1.1 }
+                                    Item { Layout.fillWidth: true }
+                                    Text { text: (window.analysisData.formats || []).length + " streams"; color: themeColors.subtle; font.pixelSize: 9 }
                                 }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text { text: "ID"; color: themeColors.subtle; font.pixelSize: 8; Layout.preferredWidth: 44 }
+                                    Text { text: "CONTAINER"; color: themeColors.subtle; font.pixelSize: 8; Layout.preferredWidth: 72 }
+                                    Text { text: "RESOLUTION"; color: themeColors.subtle; font.pixelSize: 8; Layout.preferredWidth: 105 }
+                                    Text { text: "FPS"; color: themeColors.subtle; font.pixelSize: 8; Layout.preferredWidth: 48 }
+                                    Text { text: "SIZE"; color: themeColors.subtle; font.pixelSize: 8; Layout.preferredWidth: 68 }
+                                    Text { text: "VIDEO / AUDIO"; color: themeColors.subtle; font.pixelSize: 8; Layout.fillWidth: true }
+                                }
+
                                 Repeater {
-                                    model: (window.analysisData.formats || []).slice(0, 12)
-                                    delegate: RowLayout {
+                                    model: (window.analysisData.formats || []).slice(0, 16)
+                                    delegate: Rectangle {
                                         Layout.fillWidth: true
-                                        Text { text: String(modelData.format_id || "—"); color: themeColors.text; font.pixelSize: 10; Layout.preferredWidth: 42 }
-                                        Text { text: String(modelData.ext || "—").toUpperCase(); color: themeColors.muted; font.pixelSize: 10; Layout.preferredWidth: 65 }
-                                        Text { text: String(modelData.resolution || "—"); color: themeColors.muted; font.pixelSize: 10; Layout.preferredWidth: 105 }
-                                        Text { text: modelData.fps ? String(modelData.fps) : "—"; color: themeColors.muted; font.pixelSize: 10; Layout.preferredWidth: 42 }
-                                        Text {
-                                            text: [modelData.vcodec, modelData.acodec].filter(function(v){ return v && v !== "none" }).join(" / ") || "—"
-                                            color: themeColors.subtle; font.pixelSize: 9; elide: Text.ElideRight; Layout.fillWidth: true
+                                        Layout.preferredHeight: 29
+                                        radius: 5
+                                        color: index % 2 === 0 ? themeColors.panel3 : "transparent"
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 7
+                                            anchors.rightMargin: 7
+                                            spacing: 6
+                                            Text { text: String(modelData.format_id || "—"); color: themeColors.text; font.pixelSize: 9; Layout.preferredWidth: 44 }
+                                            Text { text: String(modelData.ext || "—").toUpperCase(); color: themeColors.muted; font.pixelSize: 9; Layout.preferredWidth: 72 }
+                                            Text { text: String(modelData.resolution || "—"); color: themeColors.muted; font.pixelSize: 9; Layout.preferredWidth: 105 }
+                                            Text { text: modelData.fps ? String(modelData.fps) : "—"; color: themeColors.muted; font.pixelSize: 9; Layout.preferredWidth: 48 }
+                                            Text { text: window.displayMediaSize(modelData.filesize); color: themeColors.muted; font.pixelSize: 9; Layout.preferredWidth: 68 }
+                                            Text {
+                                                text: [modelData.vcodec, modelData.acodec].filter(function(v){ return v && v !== "none" }).join(" / ") || "—"
+                                                color: themeColors.subtle
+                                                font.pixelSize: 9
+                                                elide: Text.ElideRight
+                                                Layout.fillWidth: true
+                                            }
                                         }
                                     }
                                 }
@@ -2844,19 +3103,24 @@ ApplicationWindow {
                 }
             }
 
+            Rectangle { Layout.fillWidth: true; height: 1; color: themeColors.border }
+
             RowLayout {
                 Layout.fillWidth: true
-                Layout.leftMargin: 20
-                Layout.rightMargin: 20
-                Layout.bottomMargin: 16
+                Layout.leftMargin: 18
+                Layout.rightMargin: 18
+                Layout.topMargin: 11
+                Layout.bottomMargin: 13
                 spacing: 8
+
                 Text {
-                    text: window.analysisData.webpage_url || ""
+                    text: window.analysisData.webpage_url || window.analysisTargetUrl
                     color: themeColors.subtle
                     font.pixelSize: 9
                     elide: Text.ElideMiddle
                     Layout.fillWidth: true
                 }
+
                 Btn {
                     visible: !window.analysisBusy && !window.analysisError.length && !!window.analysisData.webpage_url
                     text: "Open source"
@@ -2864,7 +3128,13 @@ ApplicationWindow {
                     implicitHeight: 32
                     onClicked: Qt.openUrlExternally(window.analysisData.webpage_url)
                 }
-                Btn { text: "Done"; primary: true; implicitHeight: 32; onClicked: analysisDialog.close() }
+
+                Btn {
+                    text: window.analysisError.length ? "Done" : "Close"
+                    primary: true
+                    implicitHeight: 32
+                    onClicked: analysisDialog.close()
+                }
             }
         }
     }
