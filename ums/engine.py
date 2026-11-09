@@ -195,8 +195,34 @@ def tool_status(ffmpeg_path: Optional[str] = None, ffprobe_path: Optional[str] =
     }
 
 
+def _thumbnail_candidates(info: dict) -> list[str]:
+    """Return unique thumbnail URLs, preferring the largest known image."""
+    rows = []
+    for item in info.get("thumbnails") or []:
+        if not isinstance(item, dict) or not item.get("url"):
+            continue
+        try:
+            width = int(item.get("width") or 0)
+            height = int(item.get("height") or 0)
+            preference = int(item.get("preference") or 0)
+        except (TypeError, ValueError, OverflowError):
+            width = height = preference = 0
+        rows.append((preference, width * height, str(item["url"])))
+    rows.sort(key=lambda row: (row[0], row[1]), reverse=True)
+
+    primary = info.get("thumbnail")
+    ordered = ([str(primary)] if primary else []) + [row[2] for row in rows]
+    unique = []
+    seen = set()
+    for url in ordered:
+        if url and url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique[:8]
+
+
 def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settings: Optional[dict] = None) -> dict:
-    """Fetch metadata and source formats without downloading media."""
+    """Fetch source metadata, the best preview image URL, and stream details."""
     url = str(url or "").strip()
     if not is_http_url(url):
         raise MediaError("Enter a valid absolute http:// or https:// media URL with a hostname.")
@@ -239,29 +265,61 @@ def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settin
             "vcodec": f.get("vcodec"),
             "acodec": f.get("acodec"),
             "filesize": size,
-            "note": f.get("format_note") or "",
-            "format": f.get("format") or "",
+            "note": str(f.get("format_note") or ""),
+            "format": str(f.get("format") or ""),
         })
-    formats.sort(key=lambda x: (x.get("height") or 0, x.get("fps") or 0, x["format_id"]))
+    # The UI displays the first formats, so put the best resolution / frame rate
+    # first rather than hiding the useful choices below a dozen low-quality rows.
+    formats.sort(
+        key=lambda x: (
+            x.get("height") or 0,
+            x.get("fps") or 0,
+            x.get("filesize") or 0,
+            x["format_id"],
+        ),
+        reverse=True,
+    )
+    thumbnails = _thumbnail_candidates(info)
     upload_date = info.get("upload_date") or info.get("release_date") or ""
+    width = info.get("width")
+    height = info.get("height")
+    resolution = info.get("resolution") or (
+        f"{width}x{height}" if width and height else ""
+    )
     return {
         "id": str(info.get("id") or ""),
         "extractor": str(info.get("extractor_key") or info.get("extractor") or ""),
-        "title": info.get("title") or "Untitled media",
-        "description": info.get("description") or "",
+        "title": str(info.get("title") or info.get("fulltitle") or info.get("track") or "Untitled media"),
+        "description": str(info.get("description") or "")[:12000],
         "duration": info.get("duration"),
-        "thumbnail": info.get("thumbnail") or "",
-        "uploader": info.get("uploader") or info.get("channel") or "",
-        "channel": info.get("channel") or info.get("uploader") or "",
-        "channel_url": info.get("channel_url") or info.get("uploader_url") or "",
+        "thumbnail": thumbnails[0] if thumbnails else "",
+        "thumbnails": thumbnails,
+        "uploader": str(info.get("uploader") or info.get("channel") or info.get("creator") or info.get("artist") or ""),
+        "channel": str(info.get("channel") or info.get("uploader") or ""),
+        "channel_url": str(info.get("channel_url") or info.get("uploader_url") or ""),
+        "creator": str(info.get("creator") or info.get("artist") or ""),
         "upload_date": str(upload_date),
         "release_date": str(info.get("release_date") or ""),
+        "timestamp": info.get("timestamp"),
         "view_count": info.get("view_count"),
         "like_count": info.get("like_count"),
         "comment_count": info.get("comment_count"),
-        "categories": list(info.get("categories") or [])[:20],
-        "tags": list(info.get("tags") or [])[:40],
-        "webpage_url": info.get("webpage_url") or url,
+        "channel_follower_count": info.get("channel_follower_count"),
+        "age_limit": info.get("age_limit"),
+        "availability": str(info.get("availability") or ""),
+        "categories": [str(value) for value in (info.get("categories") or [])][:20],
+        "tags": [str(value) for value in (info.get("tags") or [])][:40],
+        "webpage_url": str(info.get("webpage_url") or url),
+        "format": str(info.get("format") or ""),
+        "format_id": str(info.get("format_id") or ""),
+        "ext": str(info.get("ext") or ""),
+        "resolution": str(resolution or ""),
+        "width": width,
+        "height": height,
+        "fps": info.get("fps"),
+        "filesize": info.get("filesize") or info.get("filesize_approx"),
+        "vcodec": str(info.get("vcodec") or ""),
+        "acodec": str(info.get("acodec") or ""),
         "formats": formats,
         "subtitles": sorted((info.get("subtitles") or {}).keys()),
         "automatic_captions": sorted((info.get("automatic_captions") or {}).keys()),
@@ -338,6 +396,22 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
         raise MediaError(f"Unknown video codec: {vcodec_choice}")
     if acodec_choice not in amap:
         raise MediaError(f"Unknown audio codec: {acodec_choice}")
+
+    if container == "webm":
+        # This guard protects direct engine callers too. _finalize normally
+        # supplies the copy-safe markers after ffprobe has inspected the source.
+        if not is_audio and vcodec_choice == "copy" and not options.get("_webm_video_copy_safe"):
+            raise MediaError(
+                "WebM cannot copy an unverified video stream. Re-run analysis or install ffprobe so the source codec can be checked."
+            )
+        if not is_audio and vcodec_choice != "copy" and vcodec_choice not in {"vp8", "vp9", "av1"}:
+            raise MediaError("WebM video must use VP8, VP9, or AV1.")
+        if acodec_choice == "copy" and not options.get("_webm_audio_copy_safe"):
+            raise MediaError(
+                "WebM cannot copy an unverified audio stream. Re-run analysis or install ffprobe so the source codec can be checked."
+            )
+        if acodec_choice != "copy" and acodec_choice not in {"opus", "vorbis"}:
+            raise MediaError("WebM audio must use Opus or Vorbis.")
 
     cmd = ["-hide_banner", "-loglevel", "error", "-y", "-i", str(source)]
     subtitle_files = list(subtitle_files or [])
@@ -583,7 +657,7 @@ def _run_ffmpeg(source: Path, target: Path, options: dict, ffmpeg: str,
 
 
 def _source_stream_codecs(source: Path, ffprobe: Optional[str]) -> Optional[dict]:
-    """Return the first source video/audio codec names, or None when probing fails."""
+    """Return first audio/video codecs; absent keys mean that stream type is absent."""
     if not ffprobe:
         return None
     try:
@@ -595,11 +669,13 @@ def _source_stream_codecs(source: Path, ffprobe: Optional[str]) -> Optional[dict
         if proc.returncode != 0:
             return None
         streams = json.loads(proc.stdout or "{}").get("streams") or []
-        result = {"video": None, "audio": None}
+        result = {}
         for stream in streams:
-            kind = stream.get("codec_type")
-            if kind in result and not result[kind]:
-                result[kind] = str(stream.get("codec_name") or "").lower() or None
+            kind = str(stream.get("codec_type") or "").lower()
+            if kind in {"video", "audio"} and kind not in result:
+                # Keep an empty codec name as "present but unknown". That is
+                # different from a media file which genuinely has no such stream.
+                result[kind] = str(stream.get("codec_name") or "").lower()
         return result
     except (OSError, subprocess.SubprocessError, ValueError, TypeError):
         return None
@@ -607,61 +683,69 @@ def _source_stream_codecs(source: Path, ffprobe: Optional[str]) -> Optional[dict
 
 def _normalise_webm_options(source: Path, options: dict, ffprobe: Optional[str],
                             ffmpeg: str, log_cb=None) -> dict:
-    """Ensure a WebM mux never receives H.264/AAC or other unsupported streams.
-
-    WebM supports VP8/VP9/AV1 video, Opus/Vorbis audio, and WebVTT subtitles.
-    Copy is preserved only when ffprobe confirms the source streams are valid.
-    """
-    adjusted = dict(options)
+    """Choose only WebM-safe codecs, retaining copy only after a successful probe."""
+    adjusted = dict(options or {})
     codecs = _source_stream_codecs(source, ffprobe)
     video_choice = str(adjusted.get("video_codec") or "copy").lower()
     audio_choice = str(adjusted.get("audio_codec") or "copy").lower()
     video_allowed = {"vp8", "vp9", "av1"}
     audio_allowed = {"opus", "vorbis"}
+    video_encoders = {
+        "vp9": {"libvpx-vp9"},
+        "vp8": {"libvpx"},
+        "av1": {"libsvtav1", "libaom-av1", "av1_nvenc"},
+    }
+    audio_encoders = {"opus": "libopus", "vorbis": "libvorbis"}
+    available = set(list_encoders(ffmpeg))
     changes = []
 
-    available = set(list_encoders(ffmpeg))
+    # Probe failure or an unknown codec is never treated as proof that copy is safe.
     if video_choice == "copy":
         source_video = (codecs or {}).get("video")
-        source_video_allowed = {"vp8", "vp9", "av1"}
-        needs_video_encode = (
-            not ffprobe or codecs is None or
-            (source_video is not None and source_video not in source_video_allowed)
+        has_video = codecs is not None and "video" in codecs
+        needs_video_encode = codecs is None or (
+            has_video and source_video not in video_allowed
+        )
+        video_copy_safe = codecs is not None and (
+            not has_video or source_video in video_allowed
         )
     else:
         needs_video_encode = video_choice not in video_allowed
+        video_copy_safe = False
 
     video_encoder = str(adjusted.get("video_encoder") or "Auto")
-    if video_choice == "copy" and video_encoder != "Auto":
-        adjusted["video_encoder"] = "Auto"
-        changes.append("video encoder → Auto")
-    supported_video_encoders = {
-        "vp8": {"libvpx"},
-        "vp9": {"libvpx-vp9"},
-        "av1": {"libsvtav1", "libaom-av1", "av1_nvenc"},
-    }
-    if video_choice in video_allowed and video_encoder != "Auto":
-        if video_encoder not in supported_video_encoders[video_choice]:
+    if video_choice in video_allowed:
+        compatible = video_encoders[video_choice]
+        if video_encoder != "Auto" and video_encoder not in compatible:
             adjusted["video_encoder"] = "Auto"
             adjusted["profile"] = ""
             adjusted["level"] = ""
+            video_encoder = "Auto"
             changes.append("video encoder → Auto")
-    if video_choice in video_allowed and available:
-        if not (supported_video_encoders[video_choice] & available):
+        if video_choice != "copy" and available and not (compatible & available):
             needs_video_encode = True
+    elif video_choice == "copy" and video_encoder != "Auto":
+        adjusted["video_encoder"] = "Auto"
+        changes.append("video encoder → Auto")
 
     if needs_video_encode:
-        if "libvpx-vp9" in available or not available:
-            video_choice = "vp9"
-        elif "libvpx" in available:
-            video_choice = "vp8"
-        elif {"libsvtav1", "libaom-av1", "av1_nvenc"} & available:
-            video_choice = "av1"
-        else:
+        candidates = [
+            ("vp9", "libvpx-vp9"),
+            ("vp8", "libvpx"),
+            ("av1", "libsvtav1"),
+            ("av1", "libaom-av1"),
+            ("av1", "av1_nvenc"),
+        ]
+        chosen = next(
+            ((codec, encoder) for codec, encoder in candidates if not available or encoder in available),
+            None,
+        )
+        if not chosen:
             raise MediaError(
                 "WebM output needs a VP8, VP9, or AV1 encoder. "
                 "Install an FFmpeg build with libvpx-vp9 (recommended), libvpx, or libaom-av1."
             )
+        video_choice, _encoder = chosen
         adjusted["video_codec"] = video_choice
         adjusted["video_encoder"] = "Auto"
         adjusted["profile"] = ""
@@ -671,38 +755,59 @@ def _normalise_webm_options(source: Path, options: dict, ffprobe: Optional[str],
             adjusted["rate_control"] = "CRF"
             adjusted["crf"] = "32"
             adjusted["video_bitrate"] = ""
+        video_copy_safe = False
         changes.append(f"video → {video_choice.upper()}")
 
     if audio_choice == "copy":
         source_audio = (codecs or {}).get("audio")
-        source_audio_allowed = {"opus", "vorbis"}
-        needs_audio_encode = (
-            not ffprobe or codecs is None or
-            (source_audio is not None and source_audio not in source_audio_allowed)
+        has_audio = codecs is not None and "audio" in codecs
+        needs_audio_encode = codecs is None or (
+            has_audio and source_audio not in audio_allowed
+        )
+        audio_copy_safe = codecs is not None and (
+            not has_audio or source_audio in audio_allowed
         )
     else:
         needs_audio_encode = audio_choice not in audio_allowed
+        audio_copy_safe = False
 
     if audio_choice in audio_allowed and available:
-        expected_audio_encoder = {"opus": "libopus", "vorbis": "libvorbis"}[audio_choice]
-        if expected_audio_encoder not in available:
+        if audio_encoders[audio_choice] not in available and audio_choice != "copy":
             needs_audio_encode = True
 
     if needs_audio_encode:
-        if "libopus" in available or not available:
-            audio_choice = "opus"
-        elif "libvorbis" in available:
-            audio_choice = "vorbis"
-        else:
+        candidates = ["opus", "vorbis"]
+        audio_choice = next(
+            (codec for codec in candidates if not available or audio_encoders[codec] in available),
+            None,
+        )
+        if not audio_choice:
             raise MediaError(
                 "WebM output needs an Opus or Vorbis audio encoder. "
                 "Install an FFmpeg build with libopus or libvorbis."
             )
         adjusted["audio_codec"] = audio_choice
+        audio_copy_safe = False
         changes.append(f"audio → {audio_choice.upper()}")
 
-    if changes and log_cb:
-        log_cb("WebM compatibility: adjusted unsupported stream settings (" + ", ".join(changes) + ").")
+    # WebVTT is the only subtitle format accepted by FFmpeg's WebM muxer. yt-dlp
+    # can supply SRT/ASS/TTML sidecars as well, so do not put them in the mux.
+    # _finalize preserves downloaded subtitle files next to the WebM output.
+    if adjusted.get("embed_subtitles"):
+        adjusted["embed_subtitles"] = False
+        changes.append("subtitle embedding → sidecar files")
+
+    adjusted["_webm_video_copy_safe"] = bool(video_copy_safe)
+    adjusted["_webm_audio_copy_safe"] = bool(audio_copy_safe)
+    if log_cb:
+        probed = ", ".join(f"{kind}={codec or 'unknown'}" for kind, codec in (codecs or {}).items()) or "probe unavailable"
+        selected = (
+            f"video={adjusted.get('video_codec', 'copy')}, "
+            f"audio={adjusted.get('audio_codec', 'copy')}"
+        )
+        if changes:
+            log_cb("WebM compatibility: " + ", ".join(changes) + ".")
+        log_cb(f"WebM stream check: source [{probed}] → output [{selected}].")
     return adjusted
 
 
@@ -725,7 +830,27 @@ def _probe(path: Path, ffprobe: Optional[str]) -> dict:
         raise MediaError(f"Could not validate output: {exc}") from exc
 
 
-def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg_path=None,
+def _validate_webm_streams(validation: dict) -> None:
+    """Reject any WebM file whose probed streams violate the muxer codec rules."""
+    if not validation.get("validated"):
+        return
+    streams = (validation.get("probe") or {}).get("streams") or []
+    allowed = {
+        "video": {"vp8", "vp9", "av1"},
+        "audio": {"opus", "vorbis"},
+        "subtitle": {"webvtt"},
+    }
+    for stream in streams:
+        kind = str(stream.get("codec_type") or "").lower()
+        codec = str(stream.get("codec_name") or "").lower()
+        if kind not in allowed or codec not in allowed[kind]:
+            raise MediaError(
+                f"WebM output contains an incompatible {kind or 'unknown'} stream "
+                f"({codec or 'unknown codec'}). Select a WebM-compatible profile or use MKV/MP4."
+            )
+
+
+def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg_path=
               ffprobe_path=None, cancel_event=None, progress_cb=None, subtitle_files=None,
               log_cb=None) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -783,6 +908,12 @@ def _finalize(source: Path, output_dir: Path, options: dict, job_id: str, ffmpeg
     if not target.exists() or target.stat().st_size == 0:
         raise MediaError("The output file is missing or empty.")
     validation = _probe(target, ffprobe)
+    if container == "webm":
+        try:
+            _validate_webm_streams(validation)
+        except MediaError:
+            target.unlink(missing_ok=True)
+            raise
     # Preserve subtitle sidecars when the user asked to download, but not embed, them.
     if subtitle_files and not options.get("embed_subtitles"):
         for sub in subtitle_files:
