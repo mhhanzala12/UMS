@@ -7,7 +7,9 @@ from unittest.mock import patch
 from ums.engine import (
     MediaError,
     _ffmpeg_args,
+    _finalize,
     _normalise_webm_options,
+    _download_thumbnail_candidates,
     _validate_webm_streams,
     analyze_url,
 )
@@ -30,6 +32,80 @@ class WebMCompatibilityTests(unittest.TestCase):
         self.assertFalse(options["embed_subtitles"])
         self.assertFalse(options["_webm_video_copy_safe"])
         self.assertFalse(options["_webm_audio_copy_safe"])
+
+    def test_muxer_recovery_forces_webm_compatible_encoding(self):
+        with patch("ums.engine._source_stream_codecs", return_value={"video": "vp9", "audio": "opus"}), \\
+             patch("ums.engine.list_encoders", return_value=["libvpx-vp9", "libopus"]):
+            options = _normalise_webm_options(
+                Path("input.webm"),
+                {"container": "webm", "video_codec": "copy", "audio_codec": "copy"},
+                "ffprobe", "ffmpeg", force_reencode=True,
+            )
+
+        self.assertEqual(options["video_codec"], "vp9")
+        self.assertEqual(options["audio_codec"], "opus")
+        self.assertEqual(options["rate_control"], "CRF")
+        self.assertEqual(options["crf"], "32")
+        self.assertEqual(options["pixel_format"], "yuv420p")
+        self.assertFalse(options["_webm_video_copy_safe"])
+        self.assertFalse(options["_webm_audio_copy_safe"])
+
+    def test_thumbnail_helpers_try_next_size_variant(self):
+        with patch(
+            "ums.engine._download_thumbnail_data",
+            side_effect=[b"", b"valid-preview"],
+        ) as download:
+            data = _download_thumbnail_candidates([
+                "https://example.com/large.jpg",
+                "https://example.com/fallback.jpg",
+            ])
+
+        self.assertEqual(data, b"valid-preview")
+        self.assertEqual(download.call_count, 2)
+
+    def test_webm_muxer_failure_is_retried_without_copy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "input.webm"
+            output_dir = root / "output"
+            source.write_bytes(b"source")
+            ffmpeg_calls = []
+
+            def fake_ffmpeg(_source, target, options, *_args):
+                ffmpeg_calls.append(dict(options))
+                if len(ffmpeg_calls) == 1:
+                    raise MediaError(
+                        "FFmpeg failed (exit -22): Only VP8 or VP9 or AV1 video "
+                        "and Vorbis or Opus audio and WebVTT subtitles are supported for WebM. "
+                        "Could not write header: Invalid argument"
+                    )
+                target.write_bytes(b"valid-webm")
+
+            with patch("ums.engine._which", side_effect=lambda name, configured=None: name), \\
+                 patch("ums.engine._source_stream_codecs", return_value={"video": "vp9", "audio": "opus"}), \\
+                 patch("ums.engine.list_encoders", return_value=["libvpx-vp9", "libopus"]), \\
+                 patch("ums.engine._run_ffmpeg", side_effect=fake_ffmpeg), \\
+                 patch("ums.engine._probe", return_value={
+                     "validated": True,
+                     "probe": {"streams": [
+                         {"codec_type": "video", "codec_name": "vp9"},
+                         {"codec_type": "audio", "codec_name": "opus"},
+                     ]},
+                     "message": "Output validated with ffprobe.",
+                 }):
+                result = _finalize(
+                    source, output_dir,
+                    {"container": "webm", "video_codec": "copy", "audio_codec": "copy"},
+                    "webm-retry-test",
+                    log_cb=lambda _message: None,
+                )
+
+            self.assertTrue(result.is_file())
+            self.assertEqual(len(ffmpeg_calls), 2)
+            self.assertTrue(ffmpeg_calls[0]["_webm_video_copy_safe"])
+            self.assertEqual(ffmpeg_calls[1]["video_codec"], "vp9")
+            self.assertEqual(ffmpeg_calls[1]["audio_codec"], "opus")
+            self.assertFalse(ffmpeg_calls[1]["_webm_video_copy_safe"])
 
     def test_unknown_probe_codec_is_not_treated_as_safe_to_copy(self):
         with patch("ums.engine._source_stream_codecs", return_value={"video": "", "audio": ""}), \
@@ -102,9 +178,9 @@ class WebMCompatibilityTests(unittest.TestCase):
                 {"url": "https://example.com/large.jpg", "width": 1280, "height": 720},
             ],
             "formats": [
-                {"url": "https://example.com/low", "format_id": "low", "height": 240,
-                 "fps": 25, "ext": "mp4", "vcodec": "h264", "acodec": "aac"},
-                {"url": "https://example.com/high", "format_id": "high", "height": 1080,
+                {"url": "https://example.com/low", "format_id": "low", "width": 426, "height": 240,
+                 "fps": 25, "ext": "mp4", "filesize": 500_000, "vcodec": "h264", "acodec": "aac"},
+                {"url": "https://example.com/high", "format_id": "high", "width": 1920, "height": 1080,
                  "fps": 60, "ext": "mp4", "vcodec": "h264", "acodec": "none"},
             ],
         }
@@ -129,6 +205,12 @@ class WebMCompatibilityTests(unittest.TestCase):
         self.assertEqual(data["thumbnail_data"], b"preview-bytes")
         self.assertEqual(data["thumbnails"][0], data["thumbnail"])
         self.assertEqual(data["title"], "Test title")
+        self.assertEqual(data["resolution"], "1920x1080")
+        self.assertEqual(data["fps"], 60)
+        self.assertEqual(data["vcodec"], "h264")
+        # There is no progressive format in this fixture, so a single video
+        # stream size must not be presented as the total media file size.
+        self.assertIsNone(data["filesize"])
 
 
 if __name__ == "__main__":
