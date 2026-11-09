@@ -401,7 +401,10 @@ def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settin
         "width": width,
         "height": height,
         "fps": info.get("fps") or best_video.get("fps"),
-        "filesize": info.get("filesize") or info.get("filesize_approx") or summary_format.get("filesize"),
+        # Do not report an individual video-only stream as the total file size.
+        # When yt-dlp has not selected a progressive format, the per-stream
+        # sizes remain visible in the Available Formats table.
+        "filesize": info.get("filesize") or info.get("filesize_approx") or best_combined.get("filesize"),
         "vcodec": str(top_vcodec or ""),
         "acodec": str(top_acodec or ""),
         "best_video_format": dict(best_video),
