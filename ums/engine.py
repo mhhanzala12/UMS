@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -221,6 +223,35 @@ def _thumbnail_candidates(info: dict) -> list[str]:
     return unique[:8]
 
 
+def _download_thumbnail_data(url: str, timeout: float = 4.0,
+                             max_bytes: int = 4 * 1024 * 1024) -> bytes:
+    """Fetch a small thumbnail for the legacy Widgets preview, without blocking the GUI.
+
+    This is called from AnalyzeWorker's background thread. The response is size
+    limited and non-image responses are ignored. QML consumes the URL separately.
+    """
+    url = str(url or "").strip()
+    if not is_http_url(url):
+        return b""
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "UniversalMediaStudio/1.0 (+thumbnail preview)"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            content_type = str(response.headers.get("Content-Type") or "").lower()
+            if content_type and not content_type.startswith("image/"):
+                return b""
+            data = response.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                _LOG.debug("Skipped oversized media thumbnail (%s bytes)", len(data))
+                return b""
+            return data
+    except (OSError, urllib.error.URLError, TimeoutError, ValueError) as exc:
+        _LOG.debug("Thumbnail preview download failed: %s", exc)
+        return b""
+
+
 def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settings: Optional[dict] = None) -> dict:
     """Fetch source metadata, the best preview image URL, and stream details."""
     url = str(url or "").strip()
@@ -293,6 +324,7 @@ def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settin
         "description": str(info.get("description") or "")[:12000],
         "duration": info.get("duration"),
         "thumbnail": thumbnails[0] if thumbnails else "",
+        "thumbnail_data": _download_thumbnail_data(thumbnails[0]) if thumbnails else b"",
         "thumbnails": thumbnails,
         "uploader": str(info.get("uploader") or info.get("channel") or info.get("creator") or info.get("artist") or ""),
         "channel": str(info.get("channel") or info.get("uploader") or ""),
