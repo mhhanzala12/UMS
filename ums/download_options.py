@@ -76,7 +76,10 @@ def sanitize_download_options(value: Any) -> dict[str, Any]:
         raise ValueError("Download options must be a JSON object.")
 
     result = dict(DEFAULT_DOWNLOAD_OPTIONS)
-    container = str(value.get("container", result["container"]) or "original").strip().lower()
+    raw_container = value.get("container", result["container"])
+    if not isinstance(raw_container, str):
+        raise ValueError("Output container must be a text value.")
+    container = raw_container.strip().lower()
     if container not in OUTPUT_CONTAINERS:
         raise ValueError(f"Unsupported output container: {container or '(empty)'}")
     result["container"] = container
