@@ -11,13 +11,13 @@ class HistoricalStartupRegressionTests(unittest.TestCase):
         qml = (ROOT / "ums" / "qml" / "LyricsDialog.qml").read_text(encoding="utf-8")
         self.assertNotRegex(
             qml,
-            r"\\bproperty\\s+(?:bool|var|string|int|real)\\s+synchronized\\b",
+            r"\bproperty\s+(?:bool|var|string|int|real)\s+synchronized\b",
         )
         self.assertIn("lyricsSynchronized", qml)
 
     def test_main_qml_does_not_reference_python_path_type(self):
         qml = (ROOT / "ums" / "qml" / "Main.qml").read_text(encoding="utf-8")
-        self.assertNotRegex(qml, r"\\bPath\\s*(?:\\.|\\()")
+        self.assertNotRegex(qml, r"\bPath\s*(?:\.|\()")
 
     def test_status_refresh_does_not_capture_an_undefined_request_token(self):
         bridge = (ROOT / "ums" / "qml_bridge.py").read_text(encoding="utf-8")
