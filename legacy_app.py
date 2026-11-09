@@ -8,10 +8,13 @@ from pathlib import Path
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from ums.config import configure_logging
 from ums.ui import MainWindow
 
 
 def main() -> int:
+    log_path = configure_logging()
+    logging.info("Starting legacy Universal Media Studio interface")
     app = QApplication(sys.argv)
     app.setApplicationName("Universal Media Studio")
     app.setOrganizationName("Universal Media Studio")
@@ -36,7 +39,7 @@ def main() -> int:
             None,
             "Universal Media Studio could not start",
             f"{type(exc).__name__}: {exc}\n\n"
-            "Check the console output for the full diagnostic details.",
+            f"Application log: {log_path or 'unavailable'}",
         )
         return 1
 
