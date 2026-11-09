@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -34,8 +35,10 @@ class WebMCompatibilityTests(unittest.TestCase):
         self.assertFalse(options["_webm_audio_copy_safe"])
 
     def test_muxer_recovery_forces_webm_compatible_encoding(self):
-        with patch("ums.engine._source_stream_codecs", return_value={"video": "vp9", "audio": "opus"}), \\
-             patch("ums.engine.list_encoders", return_value=["libvpx-vp9", "libopus"]):
+        with (
+            patch("ums.engine._source_stream_codecs", return_value={"video": "vp9", "audio": "opus"}),
+            patch("ums.engine.list_encoders", return_value=["libvpx-vp9", "libopus"]),
+        ):
             options = _normalise_webm_options(
                 Path("input.webm"),
                 {"container": "webm", "video_codec": "copy", "audio_codec": "copy"},
@@ -81,18 +84,20 @@ class WebMCompatibilityTests(unittest.TestCase):
                     )
                 target.write_bytes(b"valid-webm")
 
-            with patch("ums.engine._which", side_effect=lambda name, configured=None: name), \\
-                 patch("ums.engine._source_stream_codecs", return_value={"video": "vp9", "audio": "opus"}), \\
-                 patch("ums.engine.list_encoders", return_value=["libvpx-vp9", "libopus"]), \\
-                 patch("ums.engine._run_ffmpeg", side_effect=fake_ffmpeg), \\
-                 patch("ums.engine._probe", return_value={
-                     "validated": True,
-                     "probe": {"streams": [
-                         {"codec_type": "video", "codec_name": "vp9"},
-                         {"codec_type": "audio", "codec_name": "opus"},
-                     ]},
-                     "message": "Output validated with ffprobe.",
-                 }):
+            with (
+                patch("ums.engine._which", side_effect=lambda name, configured=None: name),
+                patch("ums.engine._source_stream_codecs", return_value={"video": "vp9", "audio": "opus"}),
+                patch("ums.engine.list_encoders", return_value=["libvpx-vp9", "libopus"]),
+                patch("ums.engine._run_ffmpeg", side_effect=fake_ffmpeg),
+                patch("ums.engine._probe", return_value={
+                    "validated": True,
+                    "probe": {"streams": [
+                        {"codec_type": "video", "codec_name": "vp9"},
+                        {"codec_type": "audio", "codec_name": "opus"},
+                    ]},
+                    "message": "Output validated with ffprobe.",
+                }),
+            ):
                 result = _finalize(
                     source, output_dir,
                     {"container": "webm", "video_codec": "copy", "audio_codec": "copy"},
