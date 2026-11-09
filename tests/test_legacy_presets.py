@@ -1,7 +1,8 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from ums.engine import _ffmpeg_args
+from ums.engine import _ffmpeg_args, _normalise_webm_options
 from ums.presets import PRESETS, merged_presets
 
 
@@ -34,6 +35,53 @@ class LegacyPresetTests(unittest.TestCase):
             "pad=320:240:(ow-iw)/2:(oh-ih)/2",
         )
         self.assertEqual(args[args.index("-pix_fmt") + 1], "yuv420p")
+
+    @patch("ums.engine.list_encoders", return_value=["libvpx-vp9", "libopus"])
+    @patch("ums.engine._source_stream_codecs", return_value={"video": "h264", "audio": "aac"})
+    def test_webm_copy_falls_back_to_supported_codecs(self, _source_codecs, _encoders):
+        options = {
+            "container": "webm",
+            "video_codec": "copy",
+            "audio_codec": "copy",
+            "rate_control": "Source",
+            "fps": "Source",
+            "resolution": "Source",
+            "preserve_metadata": True,
+        }
+        adjusted = _normalise_webm_options(
+            Path("input.mp4"), options, "ffprobe", "ffmpeg"
+        )
+        self.assertEqual(adjusted["video_codec"], "vp9")
+        self.assertEqual(adjusted["audio_codec"], "opus")
+        self.assertEqual(adjusted["rate_control"], "CRF")
+        self.assertEqual(adjusted["crf"], "32")
+
+        args = _ffmpeg_args(Path("input.mp4"), Path("output.webm"), adjusted)
+        self.assertEqual(args[args.index("-c:v") + 1], "libvpx-vp9")
+        self.assertEqual(args[args.index("-c:a") + 1], "libopus")
+        self.assertEqual(args[args.index("-b:v") + 1], "0")
+        self.assertEqual(args[args.index("-crf") + 1], "32")
+        self.assertIn("-deadline", args)
+        self.assertNotIn("-preset", args)
+
+    @patch("ums.engine.list_encoders", return_value=["libvpx-vp9", "libopus"])
+    @patch("ums.engine._source_stream_codecs", return_value={"video": "h264", "audio": "aac"})
+    def test_webm_explicit_incompatible_codecs_are_normalised(self, _source_codecs, _encoders):
+        options = {
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "video_encoder": "libx264",
+            "rate_control": "CRF",
+            "crf": "23",
+        }
+        adjusted = _normalise_webm_options(
+            Path("input.mp4"), options, "ffprobe", "ffmpeg"
+        )
+        self.assertEqual(adjusted["video_codec"], "vp9")
+        self.assertEqual(adjusted["audio_codec"], "opus")
+        self.assertEqual(adjusted["video_encoder"], "Auto")
+        args = _ffmpeg_args(Path("input.mp4"), Path("output.webm"), adjusted, [Path("captions.srt")])
+        self.assertEqual(args[args.index("-c:s") + 1], "webvtt")
 
     def test_custom_preset_cannot_override_a_builtin_profile(self):
         merged = merged_presets({
