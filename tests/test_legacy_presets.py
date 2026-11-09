@@ -82,8 +82,10 @@ class LegacyPresetTests(unittest.TestCase):
         self.assertEqual(adjusted["video_codec"], "vp9")
         self.assertEqual(adjusted["audio_codec"], "opus")
         self.assertEqual(adjusted["video_encoder"], "Auto")
+        self.assertFalse(adjusted["embed_subtitles"])
         args = _ffmpeg_args(Path("input.mp4"), Path("output.webm"), adjusted, [Path("captions.srt")])
-        self.assertEqual(args[args.index("-c:s") + 1], "webvtt")
+        self.assertNotIn("-c:s", args)
+        self.assertNotIn("captions.srt", args)
 
     def test_custom_preset_cannot_override_a_builtin_profile(self):
         merged = merged_presets({
