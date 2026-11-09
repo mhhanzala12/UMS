@@ -448,8 +448,13 @@ class AnalysisDialog(QDialog):
         self.setObjectName("AnalysisDialog")
         self.setWindowTitle("Analyze URL")
         self.setModal(False)
-        self.resize(900, 720)
-        self.setMinimumSize(760, 620)
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+        )
+        self.resize(980, 760)
+        self.setMinimumSize(740, 560)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 18)
@@ -513,7 +518,7 @@ class AnalysisDialog(QDialog):
 
         self.thumbnail = QLabel("Thumbnail will appear here")
         self.thumbnail.setAlignment(Qt.AlignCenter)
-        self.thumbnail.setFixedSize(330, 186)
+        self.thumbnail.setFixedSize(300, 169)
         self.thumbnail.setWordWrap(True)
         self.thumbnail.setStyleSheet(
             "background: #101720; border: 1px solid #354356; "
@@ -533,13 +538,14 @@ class AnalysisDialog(QDialog):
         metadata.setVerticalSpacing(8)
         self.metadata_values = {}
         labels = [
-            ("Uploader", "uploader"), ("Duration", "duration"),
-            ("Views", "views"), ("Published", "published"),
-            ("Source", "source"), ("Available formats", "formats"),
-            ("Subtitles", "subtitles"), ("Likes", "likes"),
+            ("Uploader", "uploader"), ("Duration", "duration"), ("Resolution", "resolution"),
+            ("Frame rate", "fps"), ("Views", "views"), ("Likes", "likes"),
+            ("Published", "published"), ("File size", "filesize"), ("Source", "source"),
+            ("Video codec", "vcodec"), ("Audio codec", "acodec"),
+            ("Available formats", "formats"), ("Subtitles", "subtitles"), ("Media ID", "media_id"),
         ]
         for index, (label, key) in enumerate(labels):
-            row, col = divmod(index, 2)
+            row, col = divmod(index, 3)
             cell = QVBoxLayout()
             cell.setSpacing(2)
             key_label = QLabel(label.upper())
@@ -583,9 +589,9 @@ class AnalysisDialog(QDialog):
         formats_title = QLabel("AVAILABLE FORMATS")
         formats_title.setObjectName("Eyebrow")
         formats_layout.addWidget(formats_title)
-        self.formats_table = QTableWidget(0, 5)
+        self.formats_table = QTableWidget(0, 6)
         self.formats_table.setHorizontalHeaderLabels(
-            ["ID", "Container", "Resolution", "FPS", "Video / audio"]
+            ["ID", "Container", "Resolution", "FPS", "File size", "Video / audio"]
         )
         self.formats_table.verticalHeader().setVisible(False)
         self.formats_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -595,8 +601,10 @@ class AnalysisDialog(QDialog):
         self.formats_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.formats_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.formats_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.formats_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.formats_table.setMaximumHeight(190)
+        self.formats_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.formats_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        self.formats_table.setMinimumHeight(140)
+        self.formats_table.setMaximumHeight(230)
         formats_layout.addWidget(self.formats_table)
         result_layout.addWidget(formats_card)
 
@@ -639,6 +647,26 @@ class AnalysisDialog(QDialog):
             return f"{value[0:4]}-{value[4:6]}-{value[6:8]}"
         return value or "—"
 
+    @staticmethod
+    def _size(value):
+        try:
+            size = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return "—"
+        if size <= 0:
+            return "—"
+        units = ("B", "KB", "MB", "GB", "TB")
+        index = 0
+        while size >= 1024 and index < len(units) - 1:
+            size /= 1024
+            index += 1
+        return f"{size:.1f} {units[index]}" if index else f"{int(size)} B"
+
+    @staticmethod
+    def _codec(value):
+        value = str(value or "").strip()
+        return "—" if not value or value.lower() == "none" else value.upper()
+
     def show_loading(self, url):
         self.heading.setText("Analyzing media")
         self.status.setText("Connecting to the source and reading its metadata…")
@@ -677,14 +705,20 @@ class AnalysisDialog(QDialog):
         values = {
             "uploader": info.get("uploader") or info.get("channel") or "—",
             "duration": self._duration(info.get("duration")),
+            "resolution": info.get("resolution") or "—",
+            "fps": (f"{float(info['fps']):g} FPS" if info.get("fps") else "—"),
             "views": self._number(info.get("view_count")),
+            "likes": self._number(info.get("like_count")),
             "published": self._date(info.get("upload_date") or info.get("release_date")),
+            "filesize": self._size(info.get("filesize")),
             "source": info.get("extractor") or "—",
+            "vcodec": self._codec(info.get("vcodec")),
+            "acodec": self._codec(info.get("acodec")),
             "formats": self._number(len(info.get("formats") or [])),
             "subtitles": self._number(
                 len(info.get("subtitles") or []) + len(info.get("automatic_captions") or [])
             ),
-            "likes": self._number(info.get("like_count")),
+            "media_id": info.get("id") or "—",
         }
         for key, label in self.metadata_values.items():
             label.setText(str(values.get(key, "—")))
@@ -724,6 +758,7 @@ class AnalysisDialog(QDialog):
                 source_format.get("ext", "—"),
                 source_format.get("resolution", "—"),
                 source_format.get("fps") or "—",
+                self._size(source_format.get("filesize")),
                 codecs,
             ]
             for col, value in enumerate(values):
