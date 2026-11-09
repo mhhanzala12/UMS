@@ -1148,7 +1148,7 @@ class AppBridge(QObject):
             logging.getLogger(__name__).exception("Could not export the application log")
             self._notify(f"Could not export application log: {exc}")
             return
-        logging.getLogger(__name__).info("Application log exported to %s", destination)
+        logging.getLogger(__name__).info("Application log exported")
         self._notify(f"Application log exported to {destination}")
 
     @Slot(str)
