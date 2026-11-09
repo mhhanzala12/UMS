@@ -308,6 +308,8 @@ class AppBridge(QObject):
         if self.analysis_worker and self.analysis_worker.isRunning():
             self._notify("An analysis is already running.")
             return
+        self._last_analysis_url = ""
+        self._last_analysis = {}
         self.statusChanged.emit(json.dumps({"analysis": "Inspecting source…"}))
         self.analysis_worker = AnalyzeWorker(url, self, settings=self.settings)
         self.analysis_worker.completed.connect(lambda data: self._analysis_ready(url, data))
