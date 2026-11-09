@@ -100,6 +100,7 @@ ApplicationWindow {
     property var lyricsLines: []
 
     function formatMediaDuration(value) {
+        if (value === null || value === undefined || value === "") return "—"
         var seconds = Math.max(0, Math.floor(Number(value) || 0))
         var hours = Math.floor(seconds / 3600)
         var minutes = Math.floor((seconds % 3600) / 60)
@@ -115,7 +116,7 @@ ApplicationWindow {
     }
     function displayMediaDate(value) {
         var date = String(value || "")
-        return date.length === 8 && /^\\d{8}$/.test(date)
+        return date.length === 8 && /^\d{8}$/.test(date)
                 ? date.slice(0, 4) + "-" + date.slice(4, 6) + "-" + date.slice(6, 8)
                 : (date || "—")
     }
