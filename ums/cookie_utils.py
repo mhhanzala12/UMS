@@ -1,6 +1,10 @@
 """Small yt-dlp helpers that do not depend on the Qt GUI runtime."""
 from __future__ import annotations
 
+import logging
+
+_LOG = logging.getLogger(__name__)
+
 
 def _is_browser_cookie_access_error(exc: BaseException) -> bool:
     """Recognise a locked/unreadable browser cookie DB, not auth failures."""
