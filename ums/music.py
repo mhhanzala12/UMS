@@ -795,6 +795,70 @@ def _music_match_score(entry: dict, metadata: dict | None, query: str) -> float:
     return title_score * 0.78 + artist_score * 0.22
 
 
+def _is_browser_cookie_access_error(exc: BaseException) -> bool:
+    """Recognise a locked/unreadable browser cookie DB, not auth failures."""
+    fragments = []
+    seen = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        fragments.append(str(current).casefold())
+        current = current.__cause__ or current.__context__
+    message = " ".join(fragments)
+    if "cookie" not in message:
+        return False
+    return any(marker in message for marker in (
+        "permission denied",
+        "access is denied",
+        "could not copy",
+        "failed to load cookies",
+        "database is locked",
+        "unable to open database file",
+    ))
+
+
+def _extract_info_with_cookie_fallback(
+    yt_dlp_module,
+    options: dict,
+    url: str,
+    *,
+    download: bool = False,
+    related_options: tuple[dict, ...] = (),
+    log_cb=None,
+    fallback_state: dict | None = None,
+):
+    """Retry once without browser cookies when the browser locks its SQLite DB.
+
+    Public music search/downloads should still work when cookies are optional.
+    We never rewrite the user's setting: if a private source needs authentication,
+    its subsequent error remains visible with guidance to close the browser.
+    """
+    def extract():
+        with yt_dlp_module.YoutubeDL(options) as ydl:
+            return ydl.extract_info(url, download=download)
+
+    try:
+        return extract()
+    except Exception as exc:
+        if "cookiesfrombrowser" not in options or not _is_browser_cookie_access_error(exc):
+            raise
+
+        for candidate in (options, *related_options):
+            candidate.pop("cookiesfrombrowser", None)
+        if fallback_state is not None:
+            fallback_state["used"] = True
+        if log_cb:
+            log_cb(
+                "The browser cookie database is locked or unreadable. "
+                "Retrying this music request without browser cookies; close the browser "
+                "fully if the source requires a signed-in session."
+            )
+        _LOG.warning(
+            "yt-dlp could not read the selected browser cookie database; retrying without browser cookies"
+        )
+        return extract()
+
+
 def run_music_download(query: str, output_dir: str, cancel_event=None,
                         progress_cb=None, log_cb=None, ffmpeg_path=None, metadata=None, settings=None) -> list[str]:
     """Find a matching public audio source with yt-dlp and tag an MP3 locally.
@@ -896,13 +960,16 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
     if progress_cb:
         progress_cb(1, "Finding a matching audio source…")
     downloaded: list[str] = []
+    cookie_fallback_state = {"used": False}
     try:
         # Ranking only needs title/uploader/duration, so search with flat extraction:
         # one request instead of fully resolving all five candidate videos.
         search_opts = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": "in_playlist",
                        "ignoreerrors": False, "socket_timeout": 25, **net_options}
-        with yt_dlp.YoutubeDL(search_opts) as search_ydl:
-            search = search_ydl.extract_info(f"ytsearch5:{query}", download=False)
+        search = _extract_info_with_cookie_fallback(
+            yt_dlp, search_opts, f"ytsearch5:{query}", download=False,
+            related_options=(options,), log_cb=log_cb, fallback_state=cookie_fallback_state,
+        )
         entries = [entry for entry in (search or {}).get("entries") or [] if entry]
         if not entries:
             raise RuntimeError("YouTube search returned no matching tracks.")
@@ -917,8 +984,10 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
             log_cb(f"Best match: {selected.get('title', 'Unknown title')} — {selected.get('uploader') or selected.get('channel') or selected.get('artist') or 'Unknown artist'} (match {score:.0%})")
             if score < 0.38:
                 log_cb("Warning: this is a weak metadata match. Check the downloaded track before keeping it.")
-        with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(selected_url, download=True)
+        info = _extract_info_with_cookie_fallback(
+            yt_dlp, options, selected_url, download=True,
+            log_cb=log_cb, fallback_state=cookie_fallback_state,
+        )
         for item in (info or {}).get("requested_downloads") or []:
             filepath = item.get("filepath") or item.get("_filename")
             if filepath and Path(filepath).suffix.lower() in AUDIO_EXTENSIONS and Path(filepath).is_file():
@@ -927,6 +996,13 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
         if cancel_event and cancel_event.is_set():
             raise CancelledError("Music download cancelled.") from exc
         message = str(exc)
+        if cookie_fallback_state["used"]:
+            raise RuntimeError(
+                "The selected browser's cookie database could not be read, so UMS retried "
+                "without browser cookies; that retry also failed. If this source needs your "
+                "signed-in session, close the browser completely and retry, or turn off "
+                "Browser cookies in Settings. Details: " + message
+            ) from exc
         if "ffmpeg" in message.lower() or "postprocessor" in message.lower():
             raise RuntimeError("Audio was found, but FFmpeg could not convert/tag it. Install FFmpeg and make sure ffmpeg and ffprobe are on PATH.") from exc
         raise RuntimeError(f"Could not download a matching audio source: {message}") from exc
