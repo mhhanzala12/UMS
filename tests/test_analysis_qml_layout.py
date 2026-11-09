@@ -28,11 +28,14 @@ class AnalysisInspectorLayoutTests(unittest.TestCase):
         self.assertIn("height: 57", metadata_section)
 
     def test_hero_and_detail_cards_are_not_allowed_to_shrink_to_zero_width(self):
-        start = self.qml.index("id: analysisScroll")
-        end = self.qml.index("Rectangle {\n                            Layout.fillWidth: true", start)
-        inspector = self.qml[start:end]
-        self.assertIn("Layout.minimumWidth: 0", inspector)
-        self.assertIn("Layout.preferredWidth: analysisScroll.availableWidth", inspector)
+        self.assertIn(
+            "Layout.minimumWidth: 0\n"
+            "                            Layout.preferredWidth: analysisScroll.availableWidth\n"
+            "                            radius: 13",
+            self.qml,
+        )
+        self.assertGreaterEqual(self.qml.count("Layout.minimumWidth: 0"), 3)
+        self.assertIn("Layout.preferredWidth: analysisScroll.availableWidth", self.qml)
 
 
 if __name__ == "__main__":
