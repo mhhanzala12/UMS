@@ -765,6 +765,26 @@ class AppBridge(QObject):
                    "preserve_metadata": True}
         self._new_task("convert", Path(source).name, options, source=source)
 
+    @Slot(str, str)
+    def enqueueConversionWithAdvancedOptions(self, source, options_json):
+        """Queue a local conversion using the same complete encoder panel as downloads."""
+        source_path = Path(str(source or "")).expanduser()
+        if not source_path.is_file():
+            self._notify("Choose an existing local media file.")
+            return
+        try:
+            raw_options = json.loads(str(options_json or "{}"))
+            options = sanitize_download_options(raw_options)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            self._notify(f"Invalid conversion options: {exc}")
+            return
+        self._new_task(
+            "convert",
+            source_path.name,
+            options,
+            source=str(source_path),
+        )
+
     @Slot(str)
     def cancelTask(self, task_id):
         task = self._find_task(task_id)
