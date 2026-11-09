@@ -22,10 +22,17 @@ def _valid_preset_name(name):
 
 DOWNLOAD_PROFILE_NAMES = (
     "Best Available Quality",
+    "Smallest File",
+    "Balanced Quality and Size",
+    "Mobile Compatible",
+    "Low-End Device",
+    "Social Media Share",
+    "Archive Quality",
     "Audio Only",
     "Lossless Audio",
     "3GP Legacy Mobile",
     "MP4 Universal Compatibility",
+    "Web Optimized",
 )
 
 
@@ -87,10 +94,18 @@ PRESETS = {
         "write_subtitles": False, "embed_subtitles": False, "preserve_metadata": True,
     },
     "3GP Legacy Mobile": {
-        "format": "best[height<=360]/best", "container": "3gp", "video_codec": "h264",
-        "audio_codec": "aac", "rate_control": "CBR", "fps": "25", "resolution": "360p",
-        "video_bitrate": "500k", "audio_bitrate": "64k", "crf": "28", "encoder_preset": "fast",
-        "write_subtitles": False, "embed_subtitles": False, "preserve_metadata": True,
+        # Feature-phone friendly QVGA target: MPEG-4 Part 2, 320x240, 20 fps.
+        # 250 kbps is a practical low-bandwidth starting point; compatibility
+        # still depends on the handset's supported 3GP audio/video profiles.
+        "format": "bestvideo[height<=480]+bestaudio/best[height<=480]/bestvideo+bestaudio/best",
+        "container": "3gp", "video_codec": "mpeg4", "audio_codec": "aac",
+        "rate_control": "CBR", "fps": "20", "fps_mode": "CFR",
+        "resolution": "Custom", "custom_scale": "320x240",
+        "video_bitrate": "250k", "audio_bitrate": "64k",
+        "sample_rate": "22050", "channels": "Mono", "pixel_format": "yuv420p",
+        "crf": "28", "encoder_preset": "fast",
+        "write_subtitles": False, "write_automatic_subtitles": False,
+        "embed_subtitles": False, "preserve_metadata": True,
     },
     "MP4 Universal Compatibility": {
         "format": "bestvideo+bestaudio/best", "container": "mp4", "video_codec": "h264",
@@ -111,6 +126,13 @@ def merged_presets(custom=None):
     result = {name: dict(value) for name, value in PRESETS.items()}
     if isinstance(custom, dict):
         for name, value in custom.items():
-            if isinstance(name, str) and _valid_preset_name(name) and isinstance(value, dict):
+            # Built-in profiles are authoritative; a stale or hand-edited
+            # custom profile must not silently replace a built-in preset.
+            if (
+                isinstance(name, str)
+                and name not in PRESETS
+                and _valid_preset_name(name)
+                and isinstance(value, dict)
+            ):
                 result[name] = dict(value)
     return result
