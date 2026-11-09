@@ -643,6 +643,8 @@ def _normalise_webm_options(source: Path, options: dict, ffprobe: Optional[str],
     if video_choice in video_allowed and video_encoder != "Auto":
         if video_encoder not in supported_video_encoders[video_choice]:
             adjusted["video_encoder"] = "Auto"
+            adjusted["profile"] = ""
+            adjusted["level"] = ""
             changes.append("video encoder → Auto")
     if video_choice in video_allowed and available:
         if not (supported_video_encoders[video_choice] & available):
