@@ -33,7 +33,8 @@ A local-first desktop GUI for **yt-dlp + FFmpeg**. It is designed for people who
 
 ### Interface and queue
 - Dark, minimal sidebar dashboard with Downloader, Converter, Queue, and Settings pages.
-- Simple profile selection with expandable advanced controls.
+- A modern expandable advanced-control panel shared by Downloader and Converter, including source quality, codecs, bitrate/rate control, FPS, resolution, encoder hardware/profile, pixel/color settings, subtitles, metadata, and thumbnail controls.
+- Custom presets can be saved from the modern panel and are validated before they are stored.
 - Sequential queue for downloads and conversions, cancellation, failed-task retry, queued-task reordering, removal, per-task activity logs, and task history for the current session.
 - Rotating application diagnostics at `~/.universal_media_studio/startup.log` (2 MiB per file, three backups), with View, Open, and Export controls in Settings. Exported logs may contain media URLs or local file paths; review before sharing.
 - Custom presets saved locally; malformed profile labels are filtered from the Download Profile menu.
