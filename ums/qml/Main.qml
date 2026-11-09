@@ -88,6 +88,7 @@ ApplicationWindow {
     property bool analysisBusy: false
     property string analysisError: ""
     property string analysisTargetUrl: ""
+    property string applicationLogText: ""
     property var analysisData: ({})
     property var analysisThumbnailList: []
     property int analysisThumbnailIndex: 0
@@ -343,6 +344,10 @@ ApplicationWindow {
         target: bridge
         function onQueueChanged() { queueItems = JSON.parse(bridge.queueJson())
  rebuildDownloads() }
+        function onLogUpdated() {
+            if (logDialog.visible)
+                applicationLogText = bridge.readLog()
+        }
         function onPresetsChanged(value) { presets = JSON.parse(value) }
         function onSettingsChanged(value) { settingsData = JSON.parse(value) }
         function onSearchResults(value) { searchItems = JSON.parse(value) }
@@ -2610,6 +2615,48 @@ ApplicationWindow {
                     }
 
                     SettingsCard {
+                        icon: "file-text"
+                        title: "Application logs"
+                        description: "View or export startup, QML, worker, FFmpeg, and download diagnostics. Logs rotate automatically to limit disk use. Review URLs and local paths before sharing."
+                        trailing: [
+                            Btn {
+                                text: "View logs"
+                                icon: "file-text"
+                                implicitHeight: 34
+                                onClicked: {
+                                    applicationLogText = bridge.readLog()
+                                    logDialog.open()
+                                }
+                            },
+                            Btn {
+                                text: "Export log"
+                                icon: "download"
+                                primary: true
+                                implicitHeight: 34
+                                onClicked: bridge.exportLog()
+                            }
+                        ]
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Text {
+                                text: bridge.logPath()
+                                color: themeColors.subtle
+                                font.pixelSize: 10
+                                font.family: "monospace"
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                            Btn {
+                                text: "Open file"
+                                icon: "external-link"
+                                implicitHeight: 32
+                                onClicked: bridge.openLogFile()
+                            }
+                        }
+                    }
+
+                    SettingsCard {
                         icon: "sparkles"
                         title: "About Universal Media Studio"
                         description: "App version 0.3.0. Update check opens the project releases page in your browser."
@@ -3185,6 +3232,73 @@ ApplicationWindow {
             }
         }
     }
+    Dialog {
+        id: logDialog
+        modal: true
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(980, window.width - 36)
+        height: Math.min(700, window.height - 36)
+        padding: 0
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape
+        background: Rectangle {
+            color: themeColors.panel
+            radius: 16
+            border.color: themeColors.border
+        }
+        contentItem: ColumnLayout {
+            spacing: 0
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 18
+                spacing: 10
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 3
+                    Text { text: "DIAGNOSTICS"; color: themeColors.lime; font.pixelSize: 9; font.weight: Font.Bold; font.letterSpacing: 1.3 }
+                    Text { text: "Application log"; color: themeColors.text; font.pixelSize: 19; font.weight: Font.Bold }
+                    Text { text: bridge.logPath(); color: themeColors.subtle; font.pixelSize: 9; font.family: "monospace"; elide: Text.ElideMiddle; Layout.fillWidth: true }
+                }
+                Btn { text: "Refresh"; icon: "refresh"; implicitHeight: 34; onClicked: applicationLogText = bridge.readLog() }
+                Btn { text: "Export"; icon: "download"; primary: true; implicitHeight: 34; onClicked: bridge.exportLog() }
+                Btn { text: "Close"; icon: "x"; implicitHeight: 34; onClicked: logDialog.close() }
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: themeColors.border }
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.margins: 14
+                clip: true
+                TextArea {
+                    text: window.applicationLogText
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: TextEdit.NoWrap
+                    color: themeColors.text
+                    selectedTextColor: themeColors.bg
+                    selectionColor: themeColors.lime
+                    font.family: "Consolas"
+                    font.pixelSize: 10
+                    background: Rectangle { color: themeColors.bg; radius: 9; border.color: themeColors.border }
+                }
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: themeColors.border }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 14
+                Text {
+                    text: "Recent log output · secrets and private URLs may appear in diagnostic messages."
+                    color: themeColors.subtle
+                    font.pixelSize: 9
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+                Btn { text: "Open log file"; icon: "external-link"; implicitHeight: 32; onClicked: bridge.openLogFile() }
+            }
+        }
+    }
+
     LyricsDialog {
         id: lyricsDialog
         songTitle: lyricsTitle || playerTitle
