@@ -100,13 +100,14 @@ class WebMCompatibilityTests(unittest.TestCase):
             ):
                 result = _finalize(
                     source, output_dir,
-                    {"container": "webm", "video_codec": "copy", "audio_codec": "copy"},
+                    {"container": "original", "video_codec": "copy", "audio_codec": "copy"},
                     "webm-retry-test",
                     log_cb=lambda _message: None,
                 )
 
             self.assertTrue(result.is_file())
             self.assertEqual(len(ffmpeg_calls), 2)
+            self.assertEqual(ffmpeg_calls[0]["container"], "webm")
             self.assertTrue(ffmpeg_calls[0]["_webm_video_copy_safe"])
             self.assertEqual(ffmpeg_calls[1]["video_codec"], "vp9")
             self.assertEqual(ffmpeg_calls[1]["audio_codec"], "opus")
