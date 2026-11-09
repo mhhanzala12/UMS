@@ -1609,9 +1609,12 @@ ApplicationWindow {
                                 onClicked: {
                                     var urls = downloadUrls.text.split(/\r?\n/).map(function(v){return v.trim()}).filter(function(v){return v.length})
                                     if (!urls.length) { toast.showMessage("Paste one or more media URLs first.", true); return }
+                                    var optionsJson = JSON.stringify(advancedDownloadPanel.options())
                                     for (var i = 0; i < urls.length; i++) {
-                                        if (/open\.spotify\.com\/(track|album|playlist)\//i.test(urls[i])) bridge.enqueueSpotify(urls[i])
-                                        else bridge.enqueueDownload(urls[i], downloadPreset.currentText, downloadContainer.currentText)
+                                        if (/open\.spotify\.com\/(track|album|playlist)\//i.test(urls[i]))
+                                            bridge.enqueueSpotify(urls[i])
+                                        else
+                                            bridge.enqueueDownloadWithOptions(urls[i], optionsJson)
                                     }
                                     toast.showMessage("Added " + urls.length + " URL(s) to the queue.")
                                     downloadUrls.text = ""
@@ -1623,48 +1626,14 @@ ApplicationWindow {
                         }
                     }
                 }
-                Rectangle {
-                    Layout.fillWidth: true; radius: 12; color: themeColors.panel; border.color: themeColors.border
-                    implicitHeight: 145
-                    ColumnLayout {
-                        anchors.fill: parent; anchors.margins: 17; spacing: 10
-                        Text { text: "DOWNLOAD PROFILE"; color: themeColors.lime; font.pixelSize: 9; font.letterSpacing: 1.2 }
-                        RowLayout {
-                            Layout.fillWidth: true; spacing: 12
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 5
-                                Text { text: "Quality preset"; color: themeColors.muted; font.pixelSize: 10 }
-                                ComboBox {
-                                    id: downloadPreset
-                                    Layout.fillWidth: true
-                                    // Keep the Download Profile list focused on the five supported profiles.
-                                    model: [
-                                        "Best Available Quality",
-                                        "Audio Only",
-                                        "Lossless Audio",
-                                        "3GP Legacy Mobile",
-                                        "MP4 Universal Compatibility"
-                                    ]
-                                    currentIndex: Math.max(0, model.indexOf(presetName))
-                                    onActivated: presetName = currentText
-                                    background: Rectangle { radius: 7; color: themeColors.panel2; border.color: themeColors.border }
-                                    contentItem: Text { leftPadding: 10; text: downloadPreset.displayText; color: themeColors.text; font.pixelSize: 10; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
-                                }
-                            }
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 5
-                                Text { text: "Output container"; color: themeColors.muted; font.pixelSize: 10 }
-                                ComboBox {
-                                    id: downloadContainer
-                                    Layout.fillWidth: true
-                                    model: ["Original","MP4","MKV","WebM","MOV","AVI","MP3","M4A","AAC","Opus","OGG","FLAC","WAV","AIFF","WMA"]
-                                    background: Rectangle { radius: 7; color: themeColors.panel2; border.color: themeColors.border }
-                                    contentItem: Text { leftPadding: 10; text: downloadContainer.displayText; color: themeColors.text; font.pixelSize: 10; verticalAlignment: Text.AlignVCenter }
-                                }
-                            }
-                        }
-                        Text { text: "For full codec, subtitle, FPS, resolution, and encoder controls, use the classic advanced Downloader window."; color: themeColors.subtle; font.pixelSize: 9; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-                    }
+                AdvancedDownloadPanel {
+                    id: advancedDownloadPanel
+                    Layout.fillWidth: true
+                    palette: window.themeColors
+                    presets: window.presets
+                    selectedPreset: window.presetName
+                    onPresetChanged: function(name) { window.presetName = name }
+                    onSavePresetRequested: function(optionsJson) { bridge.saveCustomPreset(optionsJson) }
                 }
             }
         }
