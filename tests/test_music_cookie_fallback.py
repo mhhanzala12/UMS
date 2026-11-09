@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from ums.music import (
+from ums.cookie_utils import (
     _extract_info_with_cookie_fallback,
     _is_browser_cookie_access_error,
 )
