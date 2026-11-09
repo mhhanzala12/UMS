@@ -2626,15 +2626,16 @@ ApplicationWindow {
         modal: true
         parent: Overlay.overlay
         anchors.centerIn: parent
-        width: Math.min(1000, window.width - 40)
-        height: Math.min(760, window.height - 40)
+        width: Math.min(940, window.width - 32)
+        height: Math.min(720, window.height - 32)
         padding: 0
         standardButtons: Dialog.NoButton
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         background: Rectangle {
             color: themeColors.panel
-            radius: 16
+            radius: 18
             border.color: themeColors.border
+            border.width: 1
         }
 
         contentItem: ColumnLayout {
@@ -2728,8 +2729,8 @@ ApplicationWindow {
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 26
-                    spacing: 12
+                    anchors.margins: 22
+                    spacing: 13
                     visible: window.analysisBusy
 
                     Item { Layout.fillHeight: true }
@@ -2740,7 +2741,7 @@ ApplicationWindow {
                         Layout.alignment: Qt.AlignHCenter
                     }
                     Text {
-                        text: "Getting your media ready"
+                        text: "Inspecting source metadata"
                         color: themeColors.text
                         font.pixelSize: 16
                         font.weight: Font.DemiBold
@@ -2755,7 +2756,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                     }
                     Text {
-                        text: "The title, channel, thumbnail, stream details and available formats will appear here."
+                        text: "Reading the title, channel, preview image, media properties and available formats. No media is being downloaded."
                         color: themeColors.muted
                         font.pixelSize: 11
                         wrapMode: Text.WordWrap
@@ -2845,8 +2846,8 @@ ApplicationWindow {
                                 spacing: 16
 
                                 Rectangle {
-                                    Layout.preferredWidth: 300
-                                    Layout.preferredHeight: 166
+                                    Layout.preferredWidth: Math.min(300, Math.max(190, analysisDialog.width * 0.34))
+                                    Layout.preferredHeight: Math.min(169, Math.max(107, analysisDialog.width * 0.19))
                                     radius: 9
                                     color: themeColors.panel3
                                     border.color: themeColors.border
@@ -2986,10 +2987,14 @@ ApplicationWindow {
                             Repeater {
                                 model: [
                                     {label: "DURATION", value: window.analysisData.is_live ? "Live" : window.formatMediaDuration(window.analysisData.duration)},
+                                    {label: "RESOLUTION", value: window.analysisData.resolution || "—"},
+                                    {label: "FRAME RATE", value: Number(window.analysisData.fps) > 0 ? Number(window.analysisData.fps).toFixed(2).replace(/\.00$/, "") + " FPS" : "—"},
                                     {label: "VIEWS", value: window.displayCount(window.analysisData.view_count)},
                                     {label: "LIKES", value: window.displayCount(window.analysisData.like_count)},
                                     {label: "PUBLISHED", value: window.displayMediaDate(window.analysisData.upload_date || window.analysisData.release_date)},
                                     {label: "FILE SIZE", value: window.displayMediaSize(window.analysisData.filesize)},
+                                    {label: "VIDEO CODEC", value: window.analysisData.vcodec || "—"},
+                                    {label: "AUDIO CODEC", value: window.analysisData.acodec || "—"},
                                     {label: "FORMATS", value: String((window.analysisData.formats || []).length)},
                                     {label: "SUBTITLES", value: String((window.analysisData.subtitles || []).length + (window.analysisData.automatic_captions || []).length)},
                                     {label: "MEDIA ID", value: window.analysisData.id || "—"}
