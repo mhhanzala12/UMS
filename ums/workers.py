@@ -43,10 +43,53 @@ class AnalyzeWorker(QThread):
 
     def run(self):
         try:
-            self.completed.emit(analyze_url(self.url, self.cancel_event, self.settings))
+            info = analyze_url(self.url, self.cancel_event, self.settings)
+            if self.cancel_event.is_set():
+                raise CancelledError("Analysis cancelled.")
+            thumbnail_url = str(info.get("thumbnail") or "").strip()
+            if thumbnail_url:
+                try:
+                    from urllib.parse import urlsplit
+                    from urllib.request import Request, urlopen
+
+                    if urlsplit(thumbnail_url).scheme.lower() not in {"http", "https"}:
+                        raise ValueError("Thumbnail URL must use HTTP or HTTPS.")
+                    request = Request(
+                        thumbnail_url,
+                        headers={"User-Agent": "UniversalMediaStudio/1.0"},
+                    )
+                    with urlopen(request, timeout=8) as response:
+                        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+                        image_data = response.read(4 * 1024 * 1024 + 1)
+                    valid_signature = (
+                        image_data.startswith(b"\\xff\\xd8\\xff")
+                        or image_data.startswith(b"\\x89PNG\\r\\n\\x1a\\n")
+                        or (image_data.startswith(b"RIFF") and image_data[8:12] == b"WEBP")
+                        or image_data.startswith((b"GIF87a", b"GIF89a"))
+                    )
+                    if len(image_data) <= 4 * 1024 * 1024 and (
+                        content_type.startswith("image/") or valid_signature
+                    ):
+                        info["thumbnail_data"] = image_data
+                    else:
+                        logging.getLogger(__name__).warning(
+                            "Thumbnail response was not a supported image or exceeded 4 MiB."
+                        )
+                except Exception as thumb_error:
+                    # Metadata analysis remains successful if the preview image
+                    # is unavailable, blocked, or served in an unsupported format.
+                    logging.getLogger(__name__).warning(
+                        "Could not fetch the media thumbnail: %s", thumb_error
+                    )
+            if self.cancel_event.is_set():
+                raise CancelledError("Analysis cancelled.")
+            self.completed.emit(info)
         except Exception as exc:
-            logging.getLogger(__name__).exception("URL analysis worker failed")
-            self.failed.emit(str(exc))
+            if isinstance(exc, CancelledError):
+                self.failed.emit(str(exc))
+            else:
+                logging.getLogger(__name__).exception("URL analysis worker failed")
+                self.failed.emit(str(exc))
 
 
 class MediaTaskWorker(QThread):
