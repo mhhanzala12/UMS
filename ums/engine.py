@@ -624,14 +624,6 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
         audio_bitrate = _parse_bitrate(options.get("audio_bitrate", ""))
         if audio_bitrate and acodec_choice not in {"copy", "flac", "pcm", "alac"}:
             cmd += ["-b:a", audio_bitrate]
-        sample_rate = str(options.get("sample_rate") or "").strip()
-        if sample_rate and sample_rate != "Source":
-            if not sample_rate.isdigit() or not (8000 <= int(sample_rate) <= 384000):
-                raise MediaError("Sample rate must be between 8000 and 384000 Hz.")
-            cmd += ["-ar", sample_rate]
-        channels = str(options.get("channels") or "Source")
-        if channels in {"Mono", "Stereo"}:
-            cmd += ["-ac", "1" if channels == "Mono" else "2"]
         fps = str(options.get("fps") or "Source").strip()
         fps_is_source = fps.casefold() in {"source", "vfr", "variable"}
         if not fps_is_source:
@@ -667,6 +659,17 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
                 raise MediaError("Custom resolution must look like 1920x1080.")
             width, height = custom.split("x")
             cmd += ["-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"]
+    # Audio stream controls apply to both audio-only output and video files
+    # carrying an audio stream. Keeping them outside the audio/video branch
+    # avoids the previous bug where only audio-only exports honoured them.
+    sample_rate = str(options.get("sample_rate") or "").strip()
+    if sample_rate and sample_rate != "Source":
+        if not sample_rate.isdigit() or not (8000 <= int(sample_rate) <= 384000):
+            raise MediaError("Sample rate must be between 8000 and 384000 Hz.")
+        cmd += ["-ar", sample_rate]
+    channels = str(options.get("channels") or "Source")
+    if channels in {"Mono", "Stereo"}:
+        cmd += ["-ac", "1" if channels == "Mono" else "2"]
     if options.get("preserve_metadata", True):
         cmd += ["-map_metadata", "0", "-map_chapters", "0"]
     if options.get("embed_subtitles") and subtitle_files and not is_audio:
