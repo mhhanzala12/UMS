@@ -22,6 +22,14 @@ ColumnLayout {
                 .indexOf(String(outputContainer.currentText || "").toUpperCase()) >= 0
     }
 
+    function canSetAudioBitrate() {
+        var audio = audioCodec.currentText
+        if (audio !== "copy")
+            return ["aac", "mp3", "opus", "vorbis", "wma"].indexOf(audio) >= 0
+        return ["MP3", "M4A", "AAC", "OPUS", "OGG", "WMA"]
+                .indexOf(String(outputContainer.currentText || "").toUpperCase()) >= 0
+    }
+
     function setCombo(combo, value, fallback) {
         var text = String(value === undefined || value === null || value === "" ? fallback : value)
         var rows = combo.model
@@ -85,7 +93,7 @@ ColumnLayout {
             color_range: encodeVideo ? colorRange.currentText : "Auto",
             rate_control: encodeVideo ? rateControl.currentText : "Source",
             video_bitrate: encodeVideo ? videoBitrate.text.trim() : "",
-            audio_bitrate: encodeAudio ? audioBitrate.text.trim() : "",
+            audio_bitrate: encodeAudio && root.canSetAudioBitrate() ? audioBitrate.text.trim() : "",
             crf: String(qualityValue.value),
             encoder_preset: encodeVideo ? encoderPreset.currentText : "medium",
             fps: encodeVideo ? String(frameRate.editText || frameRate.currentText || "Source").trim() : "Source",
@@ -334,7 +342,7 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Audio bitrate"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    TextField { id: audioBitrate; Layout.fillWidth: true; enabled: (audioCodec.currentText !== "copy" || root.isAudioOnlyContainer()) && !["flac","pcm","alac"].includes(audioCodec.currentText) && !(audioCodec.currentText === "copy" && ["FLAC","WAV","AIFF"].indexOf(outputContainer.currentText.toUpperCase()) >= 0); placeholderText: "e.g. 192k"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    TextField { id: audioBitrate; Layout.fillWidth: true; enabled: root.canSetAudioBitrate(); placeholderText: "e.g. 192k"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
