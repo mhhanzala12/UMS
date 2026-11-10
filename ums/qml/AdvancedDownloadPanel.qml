@@ -10,6 +10,7 @@ ColumnLayout {
     property string selectedPreset: "Best Available Quality"
     property bool expanded: false
     property bool showSourceQuality: true
+    property string activeSection: "source"
 
     signal presetChanged(string name)
     signal savePresetRequested(string optionsJson)
@@ -47,7 +48,8 @@ ColumnLayout {
         setCombo(colorRange, value.color_range, "Auto")
         videoBitrate.text = String(value.video_bitrate || "")
         audioBitrate.text = String(value.audio_bitrate || "")
-        qualityValue.value = Math.max(0, Math.min(63, Number(value.crf === undefined ? 23 : value.crf) || 0))
+        var quality = Number(value.crf === undefined ? 23 : value.crf)
+        qualityValue.value = isFinite(quality) ? Math.max(0, Math.min(63, quality)) : 23
         customScale.text = String(value.custom_scale || "")
         profileName.text = String(value.profile || "")
         codecLevel.text = String(value.level || "")
@@ -79,7 +81,7 @@ ColumnLayout {
             fps: String(frameRate.editText || frameRate.currentText || "Source").trim(),
             fps_mode: frameMode.currentText,
             resolution: resolution.currentText,
-            custom_scale: customScale.text.trim(),
+            custom_scale: resolution.currentText === "Custom" ? customScale.text.trim() : "",
             sample_rate: sampleRate.currentText,
             channels: channels.currentText,
             write_subtitles: subtitles.checked,
@@ -92,7 +94,15 @@ ColumnLayout {
 
     onSelectedPresetChanged: applyPreset(selectedPreset, presets[selectedPreset])
     onPresetsChanged: applyPreset(selectedPreset, presets[selectedPreset])
-    Component.onCompleted: applyPreset(selectedPreset, presets[selectedPreset])
+    onShowSourceQualityChanged: {
+        if (!showSourceQuality && activeSection === "source")
+            activeSection = "encoding"
+    }
+    Component.onCompleted: {
+        if (!showSourceQuality && activeSection === "source")
+            activeSection = "encoding"
+        applyPreset(selectedPreset, presets[selectedPreset])
+    }
 
     Rectangle {
         Layout.fillWidth: true
@@ -171,18 +181,71 @@ ColumnLayout {
                     background: Rectangle { radius: 8; color: "transparent"; border.color: root.palette.border || "#252b20" }
                     contentItem: Text { text: parent.text; color: root.palette.muted || "#8d9582"; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; padding: 8 }
                 }
+                Button {
+                    text: "Reset profile"
+                    onClicked: root.applyPreset(root.selectedPreset, root.presets[root.selectedPreset])
+                    background: Rectangle { radius: 8; color: "transparent"; border.color: root.palette.border || "#252b20" }
+                    contentItem: Text { text: parent.text; color: root.palette.subtle || "#8d9582"; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; padding: 8 }
+                }
                 Item { Layout.fillWidth: true }
                 Text {
-                    text: root.expanded ? "All options are passed to the queue" : "Profiles can be customized before queueing"
+                    text: root.expanded ? "Settings below are applied to every queued URL" : "Profiles can be customized before queueing"
                     color: root.palette.subtle || "#626a59"
                     font.pixelSize: 9
+                    wrapMode: Text.WordWrap
                 }
             }
         }
     }
 
+    Flow {
+        visible: root.expanded
+        Layout.fillWidth: true
+        spacing: 7
+
+        Repeater {
+            model: [
+                {key: "source", label: "Source quality"},
+                {key: "encoding", label: "Video & audio"},
+                {key: "details", label: "Encoder details"},
+                {key: "output", label: "Subtitles & output"}
+            ]
+            delegate: Button {
+                visible: modelData.key !== "source" || root.showSourceQuality
+                text: modelData.label
+                checkable: true
+                checked: root.activeSection === modelData.key
+                onClicked: root.activeSection = modelData.key
+                implicitHeight: 36
+                padding: 12
+                background: Rectangle {
+                    radius: 9
+                    color: parent.checked ? (root.palette.lime || "#c8f24f") : (root.palette.panel || "#171b13")
+                    border.color: parent.checked ? (root.palette.lime || "#c8f24f") : (root.palette.border || "#252b20")
+                }
+                contentItem: Text {
+                    text: parent.text
+                    color: parent.checked ? "#14190b" : (root.palette.muted || "#8d9582")
+                    font.pixelSize: 10
+                    font.weight: parent.checked ? Font.Bold : Font.DemiBold
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+        }
+    }
+
+    Text {
+        visible: root.expanded
+        Layout.fillWidth: true
+        text: "Choose a section. Your changes stay active while you move between sections."
+        color: root.palette.subtle || "#626a59"
+        font.pixelSize: 9
+        wrapMode: Text.WordWrap
+    }
+
     Rectangle {
-        visible: root.expanded && root.showSourceQuality
+        visible: root.expanded && root.showSourceQuality && root.activeSection === "source"
         Layout.fillWidth: true
         implicitHeight: sourceColumn.implicitHeight + 28
         radius: 12
@@ -220,7 +283,7 @@ ColumnLayout {
     }
 
     Rectangle {
-        visible: root.expanded
+        visible: root.expanded && root.activeSection === "encoding"
         Layout.fillWidth: true
         implicitHeight: encodingColumn.implicitHeight + 28
         radius: 12
@@ -256,27 +319,27 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Video bitrate"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    TextField { id: videoBitrate; Layout.fillWidth: true; placeholderText: "e.g. 4500k"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    TextField { id: videoBitrate; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && ["CBR","VBR","CQ"].indexOf(rateControl.currentText) >= 0; placeholderText: "e.g. 4500k"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Audio bitrate"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    TextField { id: audioBitrate; Layout.fillWidth: true; placeholderText: "e.g. 192k"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    TextField { id: audioBitrate; Layout.fillWidth: true; enabled: audioCodec.currentText !== "copy" && !["flac","pcm","alac"].includes(audioCodec.currentText); placeholderText: "e.g. 192k"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "CRF / quality (0–63)"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    SpinBox { id: qualityValue; Layout.fillWidth: true; from: 0; to: 63; value: 23; editable: true; palette.text: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    SpinBox { id: qualityValue; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && ["CRF","CQ"].indexOf(rateControl.currentText) >= 0; from: 0; to: 63; value: 23; editable: true; palette.text: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Encoder preset"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: encoderPreset; Layout.fillWidth: true; model: ["ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow","placebo"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: encoderPreset; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy"; model: ["ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow","placebo"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Frame rate (FPS)"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: frameRate; Layout.fillWidth: true; editable: true; model: ["Source","VFR","15","20","23.976","24","25","29.97","30","48","50","59.94","60","90","120"]; editText: "Source"; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; palette.button: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: frameRate; Layout.fillWidth: true; editable: true; model: ["Source","15","20","23.976","24","25","29.97","30","48","50","59.94","60","90","120"]; editText: "Source"; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; palette.button: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -291,7 +354,7 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Custom resolution"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    TextField { id: customScale; Layout.fillWidth: true; placeholderText: "e.g. 1920x1080"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    TextField { id: customScale; Layout.fillWidth: true; enabled: resolution.currentText === "Custom"; placeholderText: "e.g. 1920x1080"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -308,7 +371,7 @@ ColumnLayout {
     }
 
     Rectangle {
-        visible: root.expanded
+        visible: root.expanded && root.activeSection === "details"
         Layout.fillWidth: true
         implicitHeight: encoderColumn.implicitHeight + 28
         radius: 12
@@ -328,17 +391,17 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Video encoder"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: videoEncoder; Layout.fillWidth: true; model: ["Auto","libx264","h264_nvenc","h264_qsv","h264_amf","libx265","hevc_nvenc","hevc_qsv","hevc_amf","libsvtav1","libaom-av1","av1_nvenc","libvpx-vp9","libvpx","mpeg4","mpeg2video","libtheora"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: videoEncoder; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy"; model: ["Auto","libx264","h264_nvenc","h264_qsv","h264_amf","libx265","hevc_nvenc","hevc_qsv","hevc_amf","libsvtav1","libaom-av1","av1_nvenc","libvpx-vp9","libvpx","mpeg4","mpeg2video","libtheora"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Codec profile"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    TextField { id: profileName; Layout.fillWidth: true; placeholderText: "e.g. high (automatic if blank)"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    TextField { id: profileName; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy"; placeholderText: "e.g. high (automatic if blank)"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Codec level"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    TextField { id: codecLevel; Layout.fillWidth: true; placeholderText: "e.g. 4.1"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    TextField { id: codecLevel; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy"; placeholderText: "e.g. 4.1"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -360,7 +423,7 @@ ColumnLayout {
     }
 
     Rectangle {
-        visible: root.expanded
+        visible: root.expanded && root.activeSection === "output"
         Layout.fillWidth: true
         implicitHeight: preservationColumn.implicitHeight + 28
         radius: 12
