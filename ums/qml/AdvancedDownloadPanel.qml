@@ -314,7 +314,7 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Video codec"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: videoCodec; Layout.fillWidth: true; model: ["copy","h264","hevc","av1","vp9","vp8","mpeg4","mpeg2","theora"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: videoCodec; Layout.fillWidth: true; enabled: !root.isAudioOnlyContainer(); model: ["copy","h264","hevc","av1","vp9","vp8","mpeg4","mpeg2","theora"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -329,7 +329,7 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Video bitrate"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    TextField { id: videoBitrate; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && ["CBR","VBR","CQ"].indexOf(rateControl.currentText) >= 0; placeholderText: "e.g. 4500k"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    TextField { id: videoBitrate; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer() && ["CBR","VBR","CQ"].indexOf(rateControl.currentText) >= 0; placeholderText: "e.g. 4500k"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -339,12 +339,12 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "CRF / quality (0–63)"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    SpinBox { id: qualityValue; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && ["CRF","CQ"].indexOf(rateControl.currentText) >= 0; from: 0; to: 63; value: 23; editable: true; palette.text: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    SpinBox { id: qualityValue; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer() && ["CRF","CQ"].indexOf(rateControl.currentText) >= 0; from: 0; to: 63; value: 23; editable: true; palette.text: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Encoder preset"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: encoderPreset; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy"; model: ["ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow","placebo"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: encoderPreset; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); model: ["ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow","placebo"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -401,17 +401,17 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Video encoder"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: videoEncoder; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy"; model: ["Auto","libx264","h264_nvenc","h264_qsv","h264_amf","libx265","hevc_nvenc","hevc_qsv","hevc_amf","libsvtav1","libaom-av1","av1_nvenc","libvpx-vp9","libvpx","mpeg4","mpeg2video","libtheora"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: videoEncoder; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); model: ["Auto","libx264","h264_nvenc","h264_qsv","h264_amf","libx265","hevc_nvenc","hevc_qsv","hevc_amf","libsvtav1","libaom-av1","av1_nvenc","libvpx-vp9","libvpx","mpeg4","mpeg2video","libtheora"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Codec profile"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    TextField { id: profileName; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy"; placeholderText: "e.g. high (automatic if blank)"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    TextField { id: profileName; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); placeholderText: "e.g. high (automatic if blank)"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Codec level"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    TextField { id: codecLevel; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy"; placeholderText: "e.g. 4.1"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    TextField { id: codecLevel; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); placeholderText: "e.g. 4.1"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
