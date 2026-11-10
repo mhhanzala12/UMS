@@ -8,7 +8,7 @@ ColumnLayout {
     property var palette: ({})
     property var presets: ({})
     property string selectedPreset: "Best Available Quality"
-    property bool expanded: false
+    property bool expanded: true
     property bool showSourceQuality: true
     property string activeSection: "source"
 
@@ -16,6 +16,11 @@ ColumnLayout {
     signal savePresetRequested(string optionsJson)
 
     spacing: 10
+
+    function isAudioOnlyContainer() {
+        return ["MP3", "M4A", "AAC", "OPUS", "OGG", "FLAC", "WAV", "AIFF", "WMA"]
+                .indexOf(String(outputContainer.currentText || "").toUpperCase()) >= 0
+    }
 
     function setCombo(combo, value, fallback) {
         var text = String(value === undefined || value === null || value === "" ? fallback : value)
@@ -62,28 +67,33 @@ ColumnLayout {
 
     function options() {
         var container = String(outputContainer.currentText || "Original").toLowerCase()
+        var audioOnly = root.isAudioOnlyContainer()
+        var encodeVideo = !audioOnly && videoCodec.currentText !== "copy"
+        var encodeAudio = audioCodec.currentText !== "copy" || audioOnly
         return {
-            format: String(sourceFormat.editText || sourceFormat.currentText || "bestvideo+bestaudio/best").trim(),
+            format: root.showSourceQuality
+                   ? String(sourceFormat.editText || sourceFormat.currentText || "bestvideo+bestaudio/best").trim()
+                   : "bestvideo+bestaudio/best",
             container: container === "original" ? "original" : container,
-            video_codec: videoCodec.currentText,
+            video_codec: audioOnly ? "copy" : videoCodec.currentText,
             audio_codec: audioCodec.currentText,
-            video_encoder: videoEncoder.currentText,
-            profile: profileName.text.trim(),
-            level: codecLevel.text.trim(),
-            pixel_format: pixelFormat.currentText,
-            color_space: colorSpace.currentText,
-            color_range: colorRange.currentText,
-            rate_control: rateControl.currentText,
-            video_bitrate: videoBitrate.text.trim(),
-            audio_bitrate: audioBitrate.text.trim(),
+            video_encoder: encodeVideo ? videoEncoder.currentText : "Auto",
+            profile: encodeVideo ? profileName.text.trim() : "",
+            level: encodeVideo ? codecLevel.text.trim() : "",
+            pixel_format: encodeVideo ? pixelFormat.currentText : "Auto",
+            color_space: encodeVideo ? colorSpace.currentText : "Auto",
+            color_range: encodeVideo ? colorRange.currentText : "Auto",
+            rate_control: encodeVideo ? rateControl.currentText : "Source",
+            video_bitrate: encodeVideo ? videoBitrate.text.trim() : "",
+            audio_bitrate: encodeAudio ? audioBitrate.text.trim() : "",
             crf: String(qualityValue.value),
-            encoder_preset: encoderPreset.currentText,
-            fps: String(frameRate.editText || frameRate.currentText || "Source").trim(),
-            fps_mode: frameMode.currentText,
-            resolution: resolution.currentText,
-            custom_scale: resolution.currentText === "Custom" ? customScale.text.trim() : "",
-            sample_rate: sampleRate.currentText,
-            channels: channels.currentText,
+            encoder_preset: encodeVideo ? encoderPreset.currentText : "medium",
+            fps: encodeVideo ? String(frameRate.editText || frameRate.currentText || "Source").trim() : "Source",
+            fps_mode: encodeVideo ? frameMode.currentText : "CFR",
+            resolution: encodeVideo ? resolution.currentText : "Source",
+            custom_scale: encodeVideo && resolution.currentText === "Custom" ? customScale.text.trim() : "",
+            sample_rate: encodeAudio ? sampleRate.currentText : "Source",
+            channels: encodeAudio ? channels.currentText : "Source",
             write_subtitles: subtitles.checked,
             write_automatic_subtitles: automaticCaptions.checked,
             embed_subtitles: embedSubtitles.checked,
@@ -314,7 +324,7 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Rate control"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: rateControl; Layout.fillWidth: true; model: ["Source","CRF","CBR","VBR","CQ"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: rateControl; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); model: ["Source","CRF","CBR","VBR","CQ"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -324,7 +334,7 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Audio bitrate"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    TextField { id: audioBitrate; Layout.fillWidth: true; enabled: audioCodec.currentText !== "copy" && !["flac","pcm","alac"].includes(audioCodec.currentText); placeholderText: "e.g. 192k"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    TextField { id: audioBitrate; Layout.fillWidth: true; enabled: (audioCodec.currentText !== "copy" || root.isAudioOnlyContainer()) && !["flac","pcm","alac"].includes(audioCodec.currentText) && !(audioCodec.currentText === "copy" && ["FLAC","WAV","AIFF"].indexOf(outputContainer.currentText.toUpperCase()) >= 0); placeholderText: "e.g. 192k"; palette.text: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -339,17 +349,17 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Frame rate (FPS)"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: frameRate; Layout.fillWidth: true; editable: true; model: ["Source","15","20","23.976","24","25","29.97","30","48","50","59.94","60","90","120"]; editText: "Source"; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; palette.button: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: frameRate; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); editable: true; model: ["Source","15","20","23.976","24","25","29.97","30","48","50","59.94","60","90","120"]; editText: "Source"; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; palette.base: root.palette.panel2 || "#171b13"; palette.button: root.palette.panel2 || "#171b13"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Frame mode"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: frameMode; Layout.fillWidth: true; model: ["CFR","VFR"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: frameMode; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); model: ["CFR","VFR"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Output resolution"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: resolution; Layout.fillWidth: true; model: ["Source","2160p","1440p","1080p","720p","540p","480p","360p","240p","Custom"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: resolution; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); model: ["Source","2160p","1440p","1080p","720p","540p","480p","360p","240p","Custom"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -359,12 +369,12 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Audio sample rate"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: sampleRate; Layout.fillWidth: true; model: ["Source","22050","32000","44100","48000","96000","192000"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: sampleRate; Layout.fillWidth: true; enabled: audioCodec.currentText !== "copy" || root.isAudioOnlyContainer(); model: ["Source","22050","32000","44100","48000","96000","192000"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Audio channels"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: channels; Layout.fillWidth: true; model: ["Source","Mono","Stereo"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: channels; Layout.fillWidth: true; enabled: audioCodec.currentText !== "copy" || root.isAudioOnlyContainer(); model: ["Source","Mono","Stereo"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
             }
         }
@@ -406,17 +416,17 @@ ColumnLayout {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Pixel format / bit depth"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: pixelFormat; Layout.fillWidth: true; model: ["Auto","yuv420p","yuv422p","yuv444p","yuv420p10le","yuv422p10le","yuv444p10le","p010le","rgb24"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: pixelFormat; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); model: ["Auto","yuv420p","yuv422p","yuv444p","yuv420p10le","yuv422p10le","yuv444p10le","p010le","rgb24"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Color space"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: colorSpace; Layout.fillWidth: true; model: ["Auto","bt709","bt2020nc","smpte170m","bt470bg","smpte240m"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: colorSpace; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); model: ["Auto","bt709","bt2020nc","smpte170m","bt470bg","smpte240m"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
                     Text { text: "Color range"; color: root.palette.muted || "#8d9582"; font.pixelSize: 10 }
-                    ComboBox { id: colorRange; Layout.fillWidth: true; model: ["Auto","tv","pc"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
+                    ComboBox { id: colorRange; Layout.fillWidth: true; enabled: videoCodec.currentText !== "copy" && !root.isAudioOnlyContainer(); model: ["Auto","tv","pc"]; palette.text: root.palette.text || "#e9ece4"; palette.buttonText: root.palette.text || "#e9ece4"; background: Rectangle { radius: 7; color: root.palette.panel2 || "#171b13"; border.color: root.palette.border || "#252b20" } }
                 }
             }
         }
