@@ -1634,7 +1634,11 @@ ApplicationWindow {
                     presets: window.presets
                     selectedPreset: window.presetName
                     onPresetChanged: function(name) { window.presetName = name }
-                    onSavePresetRequested: function(optionsJson) { bridge.saveCustomPreset(optionsJson) }
+                    onSavePresetRequested: function(optionsJson) {
+                        var savedName = bridge.saveCustomPreset(optionsJson)
+                        if (savedName)
+                            window.presetName = savedName
+                    }
                 }
             }
         }
@@ -2313,7 +2317,11 @@ ApplicationWindow {
                             selectedPreset: window.conversionPresetName
                             showSourceQuality: false
                             onPresetChanged: function(name) { window.conversionPresetName = name }
-                            onSavePresetRequested: function(optionsJson) { bridge.saveCustomPreset(optionsJson) }
+                            onSavePresetRequested: function(optionsJson) {
+                                var savedName = bridge.saveCustomPreset(optionsJson)
+                                if (savedName)
+                                    window.conversionPresetName = savedName
+                            }
                         }
                         Button { text: "Add conversion to queue  →"
  onClicked: bridge.enqueueConversionWithAdvancedOptions(conversionSource.text, JSON.stringify(conversionAdvancedPanel.options()))
