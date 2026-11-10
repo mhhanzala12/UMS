@@ -226,6 +226,8 @@ def sanitize_download_options(value: Any) -> dict[str, Any]:
                 )
             if result["rate_control"] != "Source" or result["video_bitrate"]:
                 raise ValueError("Video rate control and bitrate require a re-encoded video codec.")
+            if result["fps_mode"] != "CFR":
+                raise ValueError("Frame mode requires a re-encoded video codec.")
         else:
             explicit_encoder = result["video_encoder"]
             if explicit_encoder != "Auto" and explicit_encoder not in _ENCODERS_BY_CODEC[video_codec]:
@@ -234,5 +236,15 @@ def sanitize_download_options(value: Any) -> dict[str, Any]:
                 )
             if result["rate_control"] in {"CBR", "VBR"} and not result["video_bitrate"]:
                 raise ValueError(f"{result['rate_control']} mode requires a video bitrate, e.g. 2500k.")
+
+    # Stream-copy cannot change audio properties in a video container. In
+    # audio-only containers the engine maps "copy" to the container's native
+    # output codec, so sample-rate/channel controls remain meaningful there.
+    if not audio_only and result["audio_codec"] == "copy":
+        if result["audio_bitrate"] or result["sample_rate"] != "Source" or result["channels"] != "Source":
+            raise ValueError(
+                "Audio bitrate, sample-rate, and channel controls require an encoded audio codec. "
+                "Choose AAC, MP3, Opus, or another output audio codec instead of copy."
+            )
 
     return result
