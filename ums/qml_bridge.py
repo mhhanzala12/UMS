@@ -373,30 +373,30 @@ class AppBridge(QObject):
             return
         self._enqueue_download(url, options)
 
-    @Slot(str)
+    @Slot(str, result=str)
     def saveCustomPreset(self, options_json):
         """Save the current advanced-control values as a validated user preset."""
         try:
             options = sanitize_download_options(json.loads(str(options_json or "{}")))
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             self._notify(f"Cannot save this preset: {exc}")
-            return
+            return ""
 
         name, accepted = QInputDialog.getText(
             None, "Save custom preset", "Preset name (1–48 characters):"
         )
         if not accepted:
-            return
+            return ""
         name = str(name).strip()
         if not _valid_preset_name(name):
             self._notify(
                 "Preset names must be 1–48 characters, start with a letter or number, "
                 "and end with a letter, number, or closing parenthesis."
             )
-            return
+            return ""
         if name in PRESETS:
             self._notify("Built-in presets are protected. Choose a different name.")
-            return
+            return ""
 
         custom = self.settings.setdefault("custom_presets", {})
         if name in custom:
@@ -408,13 +408,14 @@ class AppBridge(QObject):
                 QMessageBox.No,
             )
             if answer != QMessageBox.Yes:
-                return
+                return ""
 
         custom[name] = options
         self._persist()
         self.presets = merged_presets(custom)
         self.presetsChanged.emit(json.dumps(self.presets, ensure_ascii=False))
         self._notify(f"Saved custom preset: {name}")
+        return name
 
     @Slot(str)
     def enqueueSpotify(self, url):
