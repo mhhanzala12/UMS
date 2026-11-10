@@ -515,14 +515,6 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
         audio_bitrate = _parse_bitrate(options.get("audio_bitrate", ""))
         if audio_bitrate and acodec_choice not in {"copy", "flac", "pcm", "alac"}:
             cmd += ["-b:a", audio_bitrate]
-        sample_rate = str(options.get("sample_rate") or "").strip()
-        if sample_rate and sample_rate != "Source":
-            if not sample_rate.isdigit() or not (8000 <= int(sample_rate) <= 384000):
-                raise MediaError("Sample rate must be between 8000 and 384000 Hz.")
-            cmd += ["-ar", sample_rate]
-        channels = str(options.get("channels") or "Source")
-        if channels in {"Mono", "Stereo"}:
-            cmd += ["-ac", "1" if channels == "Mono" else "2"]
     else:
         cmd += ["-map", "0:v:0?", "-map", "0:a:0?"]
         cmd += ["-c:v", vmap[vcodec_choice]]
@@ -632,6 +624,14 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
         audio_bitrate = _parse_bitrate(options.get("audio_bitrate", ""))
         if audio_bitrate and acodec_choice not in {"copy", "flac", "pcm", "alac"}:
             cmd += ["-b:a", audio_bitrate]
+        sample_rate = str(options.get("sample_rate") or "").strip()
+        if sample_rate and sample_rate != "Source":
+            if not sample_rate.isdigit() or not (8000 <= int(sample_rate) <= 384000):
+                raise MediaError("Sample rate must be between 8000 and 384000 Hz.")
+            cmd += ["-ar", sample_rate]
+        channels = str(options.get("channels") or "Source")
+        if channels in {"Mono", "Stereo"}:
+            cmd += ["-ac", "1" if channels == "Mono" else "2"]
         fps = str(options.get("fps") or "Source").strip()
         fps_is_source = fps.casefold() in {"source", "vfr", "variable"}
         if not fps_is_source:
