@@ -2278,8 +2278,9 @@ ApplicationWindow {
  radius: 12
  color: themeColors.panel
  border.color: themeColors.border
- implicitHeight: 270
+ implicitHeight: conversionLayout.implicitHeight + 36
                     ColumnLayout {
+                        id: conversionLayout
                         anchors.fill: parent
  anchors.margins: 18
  spacing: 13
