@@ -529,6 +529,11 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
         cmd += ["-c:a", amap[acodec_choice]]
         if vcodec_choice != "copy":
             rate_control = (options.get("rate_control") or "CRF").upper()
+            # "Source" is meaningful for stream-copy. Once a codec is selected
+            # for re-encoding, use the configured quality value rather than
+            # silently falling through to FFmpeg's encoder-specific default.
+            if rate_control == "SOURCE":
+                rate_control = "CRF"
             vbitrate = _parse_bitrate(options.get("video_bitrate", ""))
             encoder = vmap[vcodec_choice]
             crf = str(options.get("crf", "23")).strip()
@@ -628,16 +633,23 @@ def _ffmpeg_args(source: Path, target: Path, options: dict, subtitle_files=None)
         if audio_bitrate and acodec_choice not in {"copy", "flac", "pcm", "alac"}:
             cmd += ["-b:a", audio_bitrate]
         fps = str(options.get("fps") or "Source").strip()
-        if fps.lower() not in {"source", "vfr", "variable"}:
+        fps_is_source = fps.casefold() in {"source", "vfr", "variable"}
+        if not fps_is_source:
             try:
                 fps_val = float(fps)
                 if not 1 <= fps_val <= 240:
                     raise ValueError()
             except ValueError as exc:
-                raise MediaError("FPS must be Source/VFR or a number between 1 and 240.") from exc
+                raise MediaError("FPS must be Source or a number between 1 and 240.") from exc
             cmd += ["-r", fps]
-            if options.get("fps_mode") == "VFR":
-                cmd += ["-fps_mode", "vfr"]
+        frame_mode = str(options.get("fps_mode") or "CFR").upper()
+        if frame_mode not in {"CFR", "VFR"}:
+            raise MediaError("Frame mode must be CFR or VFR.")
+        # Frame mode is independent of the numeric frame-rate control. In the
+        # old implementation VFR was only sent when a numeric FPS was present,
+        # so choosing Source + VFR silently did nothing.
+        if not is_audio and vcodec_choice != "copy":
+            cmd += ["-fps_mode", frame_mode.lower()]
         resolution = str(options.get("resolution") or "Source")
         if not options.get("custom_scale") and resolution != "Source" and resolution.endswith("p"):
             try:
