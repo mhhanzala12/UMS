@@ -356,9 +356,23 @@ def search_catalog(query: str, provider: str = "All", limit: int = 20, kind: str
                     errors.append(f"{label}: {exc}")
     if not results and errors:
         raise RuntimeError("Music search providers were unavailable. " + " | ".join(errors[:3]))
-    if sort:
-        results.sort(key=lambda row: (row.get("title", "").casefold(), row.get("artist", "").casefold()))
-    return results[:max(1, limit)]
+    # Interleave providers before applying the overall cap. This prevents
+    # early providers (for example Deezer) from filling the whole page and
+    # hiding later sources such as SoundCloud or Spotify.
+    provider_rows: dict[str, list[dict]] = {}
+    for source in providers:
+        rows = [row for row in results if row.get("provider") == source]
+        if sort:
+            rows.sort(key=lambda row: (row.get("title", "").casefold(), row.get("artist", "").casefold()))
+        provider_rows[source] = rows
+    combined: list[dict] = []
+    max_rows = max((len(rows) for rows in provider_rows.values()), default=0)
+    for index in range(max_rows):
+        for source in providers:
+            rows = provider_rows.get(source, [])
+            if index < len(rows):
+                combined.append(rows[index])
+    return combined[:max(1, limit)]
 
 
 def _lyrics_json(url: str, timeout: int = 16) -> dict:
