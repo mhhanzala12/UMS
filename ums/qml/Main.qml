@@ -207,7 +207,7 @@ ApplicationWindow {
     function providerColor(p) {
         if (p === "Deezer") return "#a238ff"
         if (p === "Apple Music") return "#fa4a5e"
-        if (p === "YouTube") return "#ff3b30"
+        if (p === "YouTube" || p === "YouTube Music") return "#ff3b30"
         if (p === "SoundCloud") return "#ff7a00"
         return themeColors.lime
     }
@@ -1542,6 +1542,32 @@ ApplicationWindow {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 6
+                                Rectangle {
+                                    Layout.preferredWidth: 30; Layout.preferredHeight: 30
+                                    radius: 9
+                                    color: backSearchMouse.containsMouse ? themeColors.panel2 : themeColors.panel3
+                                    border.color: themeColors.border
+                                    opacity: searchHistoryIndex > 0 ? 1 : 0.38
+                                    Icon { anchors.centerIn: parent; name: "arrow-left"; color: themeColors.text; implicitWidth: 14; implicitHeight: 14 }
+                                    MouseArea { id: backSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: searchHistoryIndex > 0; cursorShape: Qt.PointingHandCursor; onClicked: window.goSearchBack() }
+                                }
+                                Rectangle {
+                                    Layout.preferredWidth: 30; Layout.preferredHeight: 30
+                                    radius: 9
+                                    color: forwardSearchMouse.containsMouse ? themeColors.panel2 : themeColors.panel3
+                                    border.color: themeColors.border
+                                    opacity: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1 ? 1 : 0.38
+                                    Icon { anchors.centerIn: parent; name: "arrow-right"; color: themeColors.text; implicitWidth: 14; implicitHeight: 14 }
+                                    MouseArea { id: forwardSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1; cursorShape: Qt.PointingHandCursor; onClicked: window.goSearchForward() }
+                                }
+                                Rectangle {
+                                    Layout.preferredWidth: 30; Layout.preferredHeight: 30
+                                    radius: 9
+                                    color: homeSearchMouse.containsMouse ? themeColors.panel2 : themeColors.panel3
+                                    border.color: themeColors.border
+                                    Icon { anchors.centerIn: parent; name: "home"; color: themeColors.lime; implicitWidth: 14; implicitHeight: 14 }
+                                    MouseArea { id: homeSearchMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: window.showDiscoverHome() }
+                                }
                                 Text { text: "Results for"; color: themeColors.text; font.pixelSize: 16; font.weight: Font.Bold }
                                 Text { Layout.maximumWidth: 420; text: searchQuery; color: themeColors.lime; font.pixelSize: 16; font.weight: Font.Bold; elide: Text.ElideRight }
                                 Item { Layout.fillWidth: true }
@@ -1570,7 +1596,113 @@ ApplicationWindow {
                             }
                         }
                         Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: themeColors.border }
+                        GridLayout {
+                            id: artistResultsGrid
+                            visible: searchTab === "Artists"
+                            Layout.fillWidth: true
+                            Layout.margins: 14
+                            columns: Math.max(2, Math.floor(width / 180))
+                            columnSpacing: 12
+                            rowSpacing: 12
+                            Repeater {
+                                model: searchItems.filter(function(row) { return (row.kind || "Tracks") === "Artists" })
+                                delegate: Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredWidth: (artistResultsGrid.width - (artistResultsGrid.columns - 1) * artistResultsGrid.columnSpacing) / artistResultsGrid.columns
+                                    Layout.preferredHeight: 190
+                                    radius: 14
+                                    color: artistCardMouse.containsMouse ? themeColors.panel2 : themeColors.panel
+                                    border.color: artistCardMouse.containsMouse ? themeColors.borderHi : themeColors.border
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 13
+                                        spacing: 8
+                                        CoverBox {
+                                            Layout.alignment: Qt.AlignHCenter
+                                            source: modelData.cover || ""
+                                            box: 82
+                                            corner: 41
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.title || "Unknown artist"
+                                            color: themeColors.text
+                                            font.pixelSize: 12
+                                            font.weight: Font.Bold
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.album || "Artist"
+                                            color: themeColors.muted
+                                            font.pixelSize: 10
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                        }
+                                        ProviderChip { Layout.alignment: Qt.AlignHCenter; provider: modelData.provider || "" }
+                                    }
+                                    MouseArea { id: artistCardMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: window.openResult(modelData) }
+                                }
+                            }
+                        }
+                        GridLayout {
+                            id: albumResultsGrid
+                            visible: searchTab === "Albums"
+                            Layout.fillWidth: true
+                            Layout.margins: 14
+                            columns: Math.max(2, Math.floor(width / 190))
+                            columnSpacing: 12
+                            rowSpacing: 12
+                            Repeater {
+                                model: searchItems.filter(function(row) { return (row.kind || "Tracks") === "Albums" })
+                                delegate: Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredWidth: (albumResultsGrid.width - (albumResultsGrid.columns - 1) * albumResultsGrid.columnSpacing) / albumResultsGrid.columns
+                                    Layout.preferredHeight: 220
+                                    radius: 14
+                                    color: albumCardMouse.containsMouse ? themeColors.panel2 : themeColors.panel
+                                    border.color: albumCardMouse.containsMouse ? themeColors.borderHi : themeColors.border
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 13
+                                        spacing: 7
+                                        CoverBox {
+                                            Layout.alignment: Qt.AlignHCenter
+                                            source: modelData.cover || ""
+                                            box: 112
+                                            corner: 10
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.title || "Unknown album"
+                                            color: themeColors.text
+                                            font.pixelSize: 12
+                                            font.weight: Font.Bold
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.artist || "Unknown artist"
+                                            color: themeColors.muted
+                                            font.pixelSize: 10
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Layout.alignment: Qt.AlignHCenter
+                                            Text { text: modelData.album || ""; color: themeColors.subtle; font.pixelSize: 9; elide: Text.ElideRight; Layout.maximumWidth: 90 }
+                                            ProviderChip { provider: modelData.provider || "" }
+                                        }
+                                    }
+                                    MouseArea { id: albumCardMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: window.openResult(modelData) }
+                                }
+                            }
+                        }
                         Repeater {
+                            visible: searchTab !== "Artists" && searchTab !== "Albums"
                             model: visibleSearchRows
                             delegate: Item {
                                 Layout.fillWidth: true
