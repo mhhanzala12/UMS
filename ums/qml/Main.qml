@@ -1882,11 +1882,18 @@ ApplicationWindow {
                     palette: window.themeColors
                     presets: window.presets
                     selectedPreset: window.presetName
+                    canDeleteSelectedPreset: bridge.isCustomPreset(window.presetName)
                     onPresetChanged: function(name) { window.presetName = name }
                     onSavePresetRequested: function(optionsJson) {
                         var savedName = bridge.saveCustomPreset(optionsJson)
                         if (savedName)
                             window.presetName = savedName
+                    }
+                    onDeletePresetRequested: function(name) {
+                        if (bridge.deleteCustomPreset(name)) {
+                            if (window.presetName === name) window.presetName = "Best Available Quality"
+                            if (window.conversionPresetName === name) window.conversionPresetName = "Balanced Quality and Size"
+                        }
                     }
                 }
             }
@@ -2565,12 +2572,19 @@ ApplicationWindow {
                             palette: window.themeColors
                             presets: window.presets
                             selectedPreset: window.conversionPresetName
+                            canDeleteSelectedPreset: bridge.isCustomPreset(window.conversionPresetName)
                             showSourceQuality: false
                             onPresetChanged: function(name) { window.conversionPresetName = name }
                             onSavePresetRequested: function(optionsJson) {
                                 var savedName = bridge.saveCustomPreset(optionsJson)
                                 if (savedName)
                                     window.conversionPresetName = savedName
+                            }
+                            onDeletePresetRequested: function(name) {
+                                if (bridge.deleteCustomPreset(name)) {
+                                    if (window.presetName === name) window.presetName = "Best Available Quality"
+                                    if (window.conversionPresetName === name) window.conversionPresetName = "Balanced Quality and Size"
+                                }
                             }
                         }
                         Button { text: "Add conversion to queue  →"
