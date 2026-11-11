@@ -74,6 +74,9 @@ ApplicationWindow {
     property var recentSearches: (settingsData && settingsData.recent_searches) ? settingsData.recent_searches : []
     property string searchQuery: ""
     property string searchKind: "All"
+    property string searchProvider: "All catalogs"
+    property var searchHistory: []
+    property int searchHistoryIndex: -1
     property string spotifyUrl: ""
     property string presetName: "Best Available Quality"
     property string conversionPresetName: "Balanced Quality and Size"
@@ -103,6 +106,18 @@ ApplicationWindow {
     property bool lyricsTimed: false
     property bool lyricsSynchronized: false
     property var lyricsLines: []
+
+    ComboBox {
+        id: providerBox
+        visible: false
+        model: ["All catalogs", "Deezer", "Apple Music", "YouTube Music", "SoundCloud", "Spotify"]
+        onCurrentIndexChanged: window.searchProvider = currentText
+    }
+    onSearchProviderChanged: {
+        var providerIndex = providerBox.find(searchProvider)
+        if (providerIndex >= 0 && providerBox.currentIndex !== providerIndex)
+            providerBox.currentIndex = providerIndex
+    }
 
     function formatMediaDuration(value) {
         if (value === null || value === undefined || value === "") return "—"
@@ -212,6 +227,10 @@ ApplicationWindow {
     }
     function openResult(row) {
         var kind = row.kind || "Tracks"
+        if (kind !== "Tracks" && row.provider !== "Deezer") {
+            if (row.url) bridge.openCatalogUrl(row.url)
+            return
+        }
         detailData = { kind: kind, title: row.title, subtitle: row.artist, cover: row.cover || "", url: row.url || "", tracks: kind === "Tracks" ? [row] : [] }
         detailLoading = kind !== "Tracks"
         if (kind !== "Tracks") bridge.openCollection(kind, row.url || "")
@@ -292,6 +311,20 @@ ApplicationWindow {
         if (window.visibility === Window.Maximized) window.showNormal()
         else window.showMaximized()
     }
+    function updateSearchHistorySnapshot() {
+        if (searchHistoryIndex < 0 || searchHistoryIndex >= searchHistory.length)
+            return
+        var next = searchHistory.slice()
+        next[searchHistoryIndex] = {
+            query: searchQuery, provider: searchProvider, tab: searchTab,
+            results: searchItems.slice()
+        }
+        searchHistory = next
+    }
+    function setSearchTab(value) {
+        searchTab = value
+        updateSearchHistorySnapshot()
+    }
     function runSearch(text, provider) {
         text = (text || "").trim()
         if (!text.length) return
@@ -301,6 +334,15 @@ ApplicationWindow {
             bridge.enqueueSpotify(text)
             return
         }
+        searchProvider = provider || searchProvider || "All catalogs"
+        var selectedProviderIndex = providerBox.find(searchProvider)
+        if (selectedProviderIndex >= 0)
+            providerBox.currentIndex = selectedProviderIndex
+        searchHistory = searchHistory.slice(0, searchHistoryIndex + 1)
+        searchHistory.push({ query: text, provider: searchProvider, tab: "All", results: [] })
+        if (searchHistory.length > 30)
+            searchHistory.shift()
+        searchHistoryIndex = searchHistory.length - 1
         searchQuery = text
         searchKind = "All"
         searchTab = "All"
@@ -308,8 +350,51 @@ ApplicationWindow {
         detailLoading = false
         searchItems = []
         searchBusy = true
-        bridge.searchMusic(text, provider || "All catalogs", "All")
         setPage("Discover")
+        bridge.searchMusic(text, searchProvider, "All")
+    }
+    function restoreSearchHistory(index) {
+        if (index < 0 || index >= searchHistory.length)
+            return
+        var entry = searchHistory[index]
+        searchHistoryIndex = index
+        searchQuery = entry.query || ""
+        searchProvider = entry.provider || "All catalogs"
+        var selectedProviderIndex = providerBox.find(searchProvider)
+        if (selectedProviderIndex >= 0)
+            providerBox.currentIndex = selectedProviderIndex
+        searchTab = entry.tab || "All"
+        searchItems = (entry.results || []).slice()
+        detailData = null
+        detailLoading = false
+        searchBusy = false
+        setPage("Discover")
+        if (!searchItems.length && searchQuery.length) {
+            searchBusy = true
+            bridge.searchMusic(searchQuery, searchProvider, "All")
+        }
+    }
+    function goSearchBack() { restoreSearchHistory(searchHistoryIndex - 1) }
+    function goSearchForward() { restoreSearchHistory(searchHistoryIndex + 1) }
+    function showDiscoverHome() {
+        searchQuery = ""
+        searchProvider = "All catalogs"
+        searchKind = "All"
+        searchTab = "All"
+        searchItems = []
+        searchBusy = false
+        detailData = null
+        detailLoading = false
+        searchHistoryIndex = -1
+        providerBox.currentIndex = 0
+        setPage("Discover")
+    }
+    function repeatSearch() {
+        if (!searchQuery.length || searchBusy)
+            return
+        searchItems = []
+        searchBusy = true
+        bridge.searchMusic(searchQuery, searchProvider, "All")
     }
     function formatDuration(seconds) {
         if (!seconds || seconds < 0) return "—"
@@ -351,8 +436,14 @@ ApplicationWindow {
         }
         function onPresetsChanged(value) { presets = JSON.parse(value) }
         function onSettingsChanged(value) { settingsData = JSON.parse(value) }
-        function onSearchResults(value) { searchItems = JSON.parse(value) }
-        function onSearchFinished() { searchBusy = false }
+        function onSearchResults(value) {
+            searchItems = JSON.parse(value)
+            window.updateSearchHistorySnapshot()
+        }
+        function onSearchFinished() {
+            searchBusy = false
+            window.updateSearchHistorySnapshot()
+        }
         function onCollectionReady(value) {
             detailLoading = false
             if (!value) { detailData = null; return }
@@ -1246,7 +1337,7 @@ ApplicationWindow {
                             }
                             onAccepted: submit()
                         }
-                        ComboBox { id: providerBox; visible: false; model: ["All catalogs","Deezer","Apple Music","YouTube","SoundCloud"] }
+                        
                         Rectangle {
                             Layout.preferredHeight: 40
                             Layout.preferredWidth: searchBtnRow.implicitWidth + 34
@@ -1273,7 +1364,7 @@ ApplicationWindow {
                     spacing: 8
                     Repeater {
                         model: [
-                            {label: "Spotify", idx: -1}, {label: "YouTube Music", idx: 3}, {label: "SoundCloud", idx: 4},
+                            {label: "Spotify", idx: 5}, {label: "YouTube Music", idx: 3}, {label: "SoundCloud", idx: 4},
                             {label: "Deezer", idx: 1}, {label: "Apple Music", idx: 2}
                         ]
                         delegate: Rectangle {
@@ -1291,8 +1382,8 @@ ApplicationWindow {
                             MouseArea {
                                 anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                                 onClicked: {
-                                    if (modelData.idx < 0) { toast.showMessage("Paste a Spotify track, album or playlist link into the search box."); return }
                                     providerBox.currentIndex = providerBox.currentIndex === modelData.idx ? 0 : modelData.idx
+                                    searchProvider = providerBox.currentText
                                 }
                             }
                         }
@@ -1473,7 +1564,7 @@ ApplicationWindow {
                                             Text { text: modelData; color: on ? "#14190b" : themeColors.text; font.pixelSize: 12; font.weight: Font.DemiBold }
                                             Text { text: n; color: on ? "#14190b" : themeColors.subtle; font.pixelSize: 11; opacity: on ? 0.75 : 1 }
                                         }
-                                        MouseArea { id: tabMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: searchTab = modelData }
+                                        MouseArea { id: tabMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: window.setSearchTab(modelData) }
                                     }
                                 }
                             }
