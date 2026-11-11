@@ -2364,6 +2364,7 @@ ApplicationWindow {
           toast.showMessage("Conversion added to the queue.")
           setPage("Downloads")
       }
+  }
  background: Rectangle { radius: 8
  color: themeColors.lime }
  contentItem: Text { text: parent.text
