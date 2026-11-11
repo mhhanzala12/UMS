@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import base64
 import math
 import os
 import re
@@ -114,26 +115,61 @@ def _search_deezer(query: str, kind: str, limit: int) -> list[dict]:
     return results
 
 
-def _search_apple(query: str, limit: int) -> list[dict]:
-    data = _get_json("https://itunes.apple.com/search?" + urlencode({"term": query, "entity": "song", "limit": limit}))
-    return [{"kind": "Tracks", "provider": "Apple Music", "title": row.get("trackName") or "Unknown title",
-             "artist": row.get("artistName") or "Unknown artist", "album": row.get("collectionName") or "",
-             "duration": int(row["trackTimeMillis"] / 1000) if row.get("trackTimeMillis") else None,
-             "cover": row.get("artworkUrl100") or "", "url": row.get("trackViewUrl") or "",
-             "preview": row.get("previewUrl") or "",
-             "query": f"{row.get('artistName', '')} - {row.get('trackName', '')}".strip(" -")}
-            for row in data.get("results", [])]
+def _search_apple(query: str, limit: int, kind: str = "Tracks") -> list[dict]:
+    entity = {"Artists": "musicArtist", "Albums": "album"}.get(kind, "song")
+    data = _get_json("https://itunes.apple.com/search?" + urlencode({
+        "term": query, "entity": entity, "limit": min(max(1, limit), 200)
+    }))
+    results = []
+    for row in data.get("results", []):
+        if kind == "Artists":
+            name = row.get("artistName") or "Unknown artist"
+            results.append({
+                "kind": "Artists", "provider": "Apple Music", "title": name, "artist": name,
+                "album": row.get("artistType") or "Artist", "duration": None, "cover": "",
+                "url": row.get("artistLinkUrl") or "", "preview": "", "query": name,
+            })
+        elif kind == "Albums":
+            title = row.get("collectionName") or "Unknown album"
+            artist = row.get("artistName") or "Unknown artist"
+            results.append({
+                "kind": "Albums", "provider": "Apple Music", "title": title, "artist": artist,
+                "album": f'{row.get("trackCount", 0)} tracks' if row.get("trackCount") else "",
+                "duration": None, "cover": row.get("artworkUrl100") or "",
+                "url": row.get("collectionViewUrl") or "", "preview": "",
+                "query": f"{artist} - {title}".strip(" -"),
+            })
+        else:
+            title = row.get("trackName") or "Unknown title"
+            artist = row.get("artistName") or "Unknown artist"
+            results.append({
+                "kind": "Tracks", "provider": "Apple Music", "title": title, "artist": artist,
+                "album": row.get("collectionName") or "",
+                "duration": int(row["trackTimeMillis"] / 1000) if row.get("trackTimeMillis") else None,
+                "cover": row.get("artworkUrl100") or "", "url": row.get("trackViewUrl") or "",
+                "preview": row.get("previewUrl") or "",
+                "query": f"{artist} - {title}".strip(" -"),
+            })
+    return results
 
 
 def _search_ytdlp(source: str, prefix: str, query: str, limit: int) -> list[dict]:
     try:
         import yt_dlp
     except ImportError as exc:
-        raise RuntimeError("yt-dlp is required for YouTube and SoundCloud search.") from exc
+        raise RuntimeError("yt-dlp is required for YouTube Music and SoundCloud search.") from exc
     opts = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": "in_playlist",
             "ignoreerrors": True, "socket_timeout": 12}
     with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(f"{prefix}{min(limit, 20)}:{query}", download=False)
+        if source == "YouTube Music":
+            music_url = "https://music.youtube.com/search?" + urlencode({"q": query}) + "#songs"
+            try:
+                info = ydl.extract_info(music_url, download=False)
+            except Exception:
+                # Fallback for older yt-dlp builds without the music search URL extractor.
+                info = ydl.extract_info(f"ytsearch{min(limit, 20)}:{query}", download=False)
+        else:
+            info = ydl.extract_info(f"{prefix}{min(limit, 20)}:{query}", download=False)
     results = []
     for row in (info or {}).get("entries") or []:
         if not row:
@@ -147,30 +183,166 @@ def _search_ytdlp(source: str, prefix: str, query: str, limit: int) -> list[dict
     return results
 
 
-def search_catalog(query: str, provider: str = "All", limit: int = 20, kind: str = "All", sort: bool = True) -> list[dict]:
-    """Search public music catalogs. Artist/album/playlist discovery is provided by Deezer.
+_SPOTIFY_TOKEN_LOCK = threading.Lock()
+_SPOTIFY_TOKEN = ""
+_SPOTIFY_TOKEN_EXPIRES = 0.0
 
-    Providers are queried concurrently (they used to run one after another, so
-    a "All catalogs" search cost the *sum* of four network round-trips instead
-    of the slowest one). Result order stays deterministic: provider order.
+
+def _spotify_credentials_available() -> bool:
+    return bool(os.environ.get("UMS_SPOTIFY_CLIENT_ID", "").strip()
+                and os.environ.get("UMS_SPOTIFY_CLIENT_SECRET", "").strip())
+
+
+def _spotify_access_token() -> str:
+    """Obtain an app-only Spotify token; credentials are never written to settings."""
+    global _SPOTIFY_TOKEN, _SPOTIFY_TOKEN_EXPIRES
+    client_id = os.environ.get("UMS_SPOTIFY_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("UMS_SPOTIFY_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        raise RuntimeError(
+            "Spotify catalog search needs UMS_SPOTIFY_CLIENT_ID and "
+            "UMS_SPOTIFY_CLIENT_SECRET environment variables. Other catalogs still work."
+        )
+    with _SPOTIFY_TOKEN_LOCK:
+        if _SPOTIFY_TOKEN and time.monotonic() < _SPOTIFY_TOKEN_EXPIRES:
+            return _SPOTIFY_TOKEN
+        credentials = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+        request = Request(
+            "https://accounts.spotify.com/api/token",
+            data=urlencode({"grant_type": "client_credentials"}).encode("utf-8"),
+            headers={
+                "Authorization": "Basic " + credentials,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "UniversalMediaStudio/1.0",
+            },
+        )
+        try:
+            with urlopen(request, timeout=12) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"Spotify authentication failed: {exc}") from exc
+        token = str(payload.get("access_token") or "")
+        if not token:
+            raise RuntimeError("Spotify did not return an app access token.")
+        _SPOTIFY_TOKEN = token
+        _SPOTIFY_TOKEN_EXPIRES = time.monotonic() + max(60, int(payload.get("expires_in", 3600)) - 60)
+        return token
+
+
+def _search_spotify(query: str, limit: int, kind: str = "All") -> list[dict]:
+    token = _spotify_access_token()
+    kinds = {
+        "Tracks": ["track"], "Artists": ["artist"], "Albums": ["album"],
+        "Playlists": ["playlist"], "All": ["track", "artist", "album", "playlist"],
+    }.get(kind, ["track"])
+    market = os.environ.get("UMS_SPOTIFY_MARKET", "US").strip().upper() or "US"
+    params = urlencode({
+        "q": query, "type": ",".join(kinds), "limit": min(max(1, limit), 10), "market": market,
+    })
+    request = Request(
+        "https://api.spotify.com/v1/search?" + params,
+        headers={"Authorization": "Bearer " + token, "Accept": "application/json",
+                 "User-Agent": "UniversalMediaStudio/1.0"},
+    )
+    try:
+        with urlopen(request, timeout=12) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"Spotify catalog search failed: {exc}") from exc
+
+    results = []
+    for row in (payload.get("tracks") or {}).get("items") or []:
+        album = row.get("album") or {}
+        artists = ", ".join(a.get("name", "") for a in row.get("artists") or [] if a.get("name"))
+        images = album.get("images") or []
+        results.append({
+            "kind": "Tracks", "provider": "Spotify", "title": row.get("name") or "Unknown title",
+            "artist": artists or "Unknown artist", "album": album.get("name") or "",
+            "duration": int(row["duration_ms"] / 1000) if row.get("duration_ms") else None,
+            "cover": images[0].get("url", "") if images else "",
+            "url": (row.get("external_urls") or {}).get("spotify") or "", "preview": "",
+            "query": f"{artists} - {row.get('name', '')}".strip(" -"),
+        })
+    for row in (payload.get("artists") or {}).get("items") or []:
+        images = row.get("images") or []
+        followers = (row.get("followers") or {}).get("total")
+        results.append({
+            "kind": "Artists", "provider": "Spotify", "title": row.get("name") or "Unknown artist",
+            "artist": row.get("name") or "Unknown artist",
+            "album": f"{followers:,} followers" if isinstance(followers, int) else "Artist",
+            "duration": None, "cover": images[0].get("url", "") if images else "",
+            "url": (row.get("external_urls") or {}).get("spotify") or "", "preview": "",
+            "query": row.get("name") or "",
+        })
+    for row in (payload.get("albums") or {}).get("items") or []:
+        images = row.get("images") or []
+        artists = ", ".join(a.get("name", "") for a in row.get("artists") or [] if a.get("name"))
+        results.append({
+            "kind": "Albums", "provider": "Spotify", "title": row.get("name") or "Unknown album",
+            "artist": artists or "Unknown artist",
+            "album": f'{row.get("total_tracks", 0)} tracks' if row.get("total_tracks") else "",
+            "duration": None, "cover": images[0].get("url", "") if images else "",
+            "url": (row.get("external_urls") or {}).get("spotify") or "", "preview": "",
+            "query": f"{artists} - {row.get('name', '')}".strip(" -"),
+        })
+    for row in (payload.get("playlists") or {}).get("items") or []:
+        if not row:
+            continue
+        images = row.get("images") or []
+        owner = (row.get("owner") or {}).get("display_name") or "Unknown creator"
+        track_total = (row.get("tracks") or {}).get("total")
+        results.append({
+            "kind": "Playlists", "provider": "Spotify", "title": row.get("name") or "Untitled playlist",
+            "artist": owner, "album": f"{track_total} tracks" if isinstance(track_total, int) else "",
+            "duration": None, "cover": images[0].get("url", "") if images else "",
+            "url": (row.get("external_urls") or {}).get("spotify") or "", "preview": "",
+            "query": row.get("name") or "",
+        })
+    return results
+
+
+def search_catalog(query: str, provider: str = "All", limit: int = 20, kind: str = "All", sort: bool = True) -> list[dict]:
+    """Search catalog APIs plus yt-dlp-compatible YouTube Music and SoundCloud search.
+
+    Spotify is added to aggregate searches only when official app credentials
+    are configured through environment variables.
     """
-    query = query.strip()
+    query = str(query or "").strip()
     if not query:
         return []
     kind = kind if kind in {"All", "Tracks", "Artists", "Albums", "Playlists"} else "All"
-    providers = ["Deezer", "Apple Music", "YouTube", "SoundCloud"] if provider in {"All", "All catalogs"} else [provider]
-    if kind in {"Artists", "Albums", "Playlists"}:
-        # These catalog object types are supported by Deezer's public search endpoints.
-        providers = ["Deezer"]
+    provider = {"YouTube": "YouTube Music"}.get(provider, provider)
+    if provider in {"All", "All catalogs"}:
+        providers = ["Deezer", "Apple Music", "YouTube Music", "SoundCloud"]
+        if _spotify_credentials_available():
+            providers.append("Spotify")
+    else:
+        providers = [provider]
+    if "Spotify" in providers and not _spotify_credentials_available():
+        if provider == "Spotify":
+            raise RuntimeError(
+                "Spotify catalog search requires UMS_SPOTIFY_CLIENT_ID and "
+                "UMS_SPOTIFY_CLIENT_SECRET. Configure an official Spotify developer app to enable it."
+            )
+        providers.remove("Spotify")
+
+    if kind in {"Artists", "Albums"}:
+        providers = [name for name in providers if name in {"Deezer", "Apple Music", "Spotify"}]
+    elif kind == "Playlists":
+        providers = [name for name in providers if name in {"Deezer", "Spotify"}]
+
     jobs = []
     if "Deezer" in providers:
         jobs.append(("Deezer", lambda: _search_deezer(query, kind, limit)))
-    if kind in {"All", "Tracks"}:
-        if "Apple Music" in providers:
-            jobs.append(("Apple Music", lambda: _search_apple(query, limit)))
-        for source, prefix in (("YouTube", "ytsearch"), ("SoundCloud", "scsearch")):
-            if source in providers:
-                jobs.append((source, lambda source=source, prefix=prefix: _search_ytdlp(source, prefix, query, limit)))
+    if "Apple Music" in providers and kind in {"All", "Tracks", "Artists", "Albums"}:
+        jobs.append(("Apple Music", lambda: _search_apple(query, limit, kind)))
+    if "YouTube Music" in providers and kind in {"All", "Tracks"}:
+        jobs.append(("YouTube Music", lambda: _search_ytdlp("YouTube Music", "ytsearch", query, limit)))
+    if "SoundCloud" in providers and kind in {"All", "Tracks"}:
+        jobs.append(("SoundCloud", lambda: _search_ytdlp("SoundCloud", "scsearch", query, limit)))
+    if "Spotify" in providers:
+        jobs.append(("Spotify", lambda: _search_spotify(query, limit, kind)))
+
     results: list[dict] = []
     errors: list[str] = []
     if jobs:
@@ -185,7 +357,7 @@ def search_catalog(query: str, provider: str = "All", limit: int = 20, kind: str
         raise RuntimeError("Music search providers were unavailable. " + " | ".join(errors[:3]))
     if sort:
         results.sort(key=lambda row: (row.get("title", "").casefold(), row.get("artist", "").casefold()))
-    return results[:limit]
+    return results[:max(1, limit)]
 
 
 def _lyrics_json(url: str, timeout: int = 16) -> dict:
@@ -534,7 +706,7 @@ class CatalogSearchWorker(QThread):
                 self.completed.emit(search_catalog(self.query, self.provider, kind=self.kind))
                 return
             stages = [("Tracks", 60)]
-            if self.provider in {"All", "All catalogs", "Deezer"}:
+            if self.provider in {"All", "All catalogs", "Deezer", "Apple Music", "Spotify"}:
                 stages += [("Artists", 30), ("Albums", 30), ("Playlists", 30)]
             by_stage: dict[int, list[dict]] = {}
             errors: list[str] = []
