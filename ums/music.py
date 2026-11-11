@@ -906,6 +906,7 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
         search = _extract_info_with_cookie_fallback(
             yt_dlp, search_opts, f"ytsearch5:{query}", download=False,
             related_options=(options,), log_cb=log_cb, fallback_state=cookie_fallback_state,
+            task_label="music search",
         )
         entries = [entry for entry in (search or {}).get("entries") or [] if entry]
         if not entries:
@@ -924,6 +925,7 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
         info = _extract_info_with_cookie_fallback(
             yt_dlp, options, selected_url, download=True,
             log_cb=log_cb, fallback_state=cookie_fallback_state,
+            task_label="music download",
         )
         for item in (info or {}).get("requested_downloads") or []:
             filepath = item.get("filepath") or item.get("_filename")
