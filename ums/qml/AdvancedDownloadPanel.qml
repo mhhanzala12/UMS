@@ -11,6 +11,72 @@ ColumnLayout {
     property bool expanded: true
     property bool showSourceQuality: true
     property string activeSection: "source"
+    readonly property string outputSummary: {
+        var container = String(outputContainer.currentText || "Original")
+        var audioOnly = root.isAudioOnlyContainer()
+        var video = audioOnly ? "Audio export" : ("Video " + String(videoCodec.currentText || "copy").toUpperCase())
+        var audio = "Audio " + String(audioCodec.currentText || "copy").toUpperCase()
+        var size = audioOnly ? "" : (resolution.currentText === "Custom"
+                   ? customScale.text.trim() : resolution.currentText)
+        var fps = audioOnly ? "" : String(frameRate.editText || frameRate.currentText || "Source").trim()
+        var parts = [container, video, audio]
+        if (size && size !== "Source") parts.push(size)
+        if (fps && fps !== "Source") parts.push(fps + " FPS")
+        return parts.join("  ·  ")
+    }
+    readonly property string validationMessage: {
+        var audioOnly = root.isAudioOnlyContainer()
+        var video = String(videoCodec.currentText || "copy")
+        if (!audioOnly && video !== "copy") {
+            var mode = String(rateControl.currentText || "Source")
+            if ((mode === "CBR" || mode === "VBR") && !String(videoBitrate.text || "").trim())
+                return mode + " mode needs a video bitrate, for example 2500k."
+            if (resolution.currentText === "Custom") {
+                var dimensions = /^(\\d{2,5})x(\\d{2,5})$/i.exec(String(customScale.text || "").trim())
+                if (!dimensions)
+                    return "Custom resolution must use WIDTHxHEIGHT, for example 320x240."
+                var width = Number(dimensions[1]), height = Number(dimensions[2])
+                if (width < 16 || height < 16 || width > 16384 || height > 16384)
+                    return "Custom dimensions must be between 16 and 16384 pixels."
+            }
+            var fps = String(frameRate.editText || frameRate.currentText || "Source").trim()
+            if (fps.toLowerCase() !== "source") {
+                var rate = Number(fps)
+                if (!isFinite(rate) || rate < 1 || rate > 240)
+                    return "Frame rate must be Source or a number between 1 and 240."
+            }
+            var codec = String(videoCodec.currentText || "")
+            var encoder = String(videoEncoder.currentText || "Auto")
+            var families = {
+                h264: ["libx264", "h264_nvenc", "h264_qsv", "h264_amf"],
+                hevc: ["libx265", "hevc_nvenc", "hevc_qsv", "hevc_amf"],
+                av1: ["libsvtav1", "libaom-av1", "av1_nvenc"],
+                vp9: ["libvpx-vp9"], vp8: ["libvpx"],
+                mpeg4: ["mpeg4"], mpeg2: ["mpeg2video"], theora: ["libtheora"]
+            }
+            if (encoder !== "Auto" && families[codec] && families[codec].indexOf(encoder) < 0)
+                return encoder + " is not an encoder for " + codec.toUpperCase() + "."
+        }
+        if (root.canSetAudioBitrate()) {
+            var audioRate = String(audioBitrate.text || "").trim()
+            if (audioRate && !/^\\d+(?:\\.\\d+)?\\s*[kKmMgG]?$/.test(audioRate))
+                return "Audio bitrate must look like 192k or 1M."
+        }
+        return ""
+    }
+    readonly property string compatibilityNotice: {
+        var container = String(outputContainer.currentText || "").toLowerCase()
+        if (container !== "webm" || root.isAudioOnlyContainer())
+            return ""
+        var notices = []
+        if (videoCodec.currentText !== "copy" && ["vp8", "vp9", "av1"].indexOf(videoCodec.currentText) < 0)
+            notices.push("WebM requires VP8, VP9 or AV1 video; UMS will select a compatible stream.")
+        if (audioCodec.currentText !== "copy" && ["opus", "vorbis"].indexOf(audioCodec.currentText) < 0)
+            notices.push("WebM requires Opus or Vorbis audio; UMS will select a compatible stream.")
+        if (embedSubtitles.checked)
+            notices.push("WebM subtitles are retained as sidecar files instead of being embedded.")
+        return notices.join(" ")
+    }
 
     signal presetChanged(string name)
     signal savePresetRequested(string optionsJson)
@@ -136,11 +202,18 @@ ColumnLayout {
             spacing: 10
 
             Text {
-                text: "DOWNLOAD PROFILE"
+                text: root.showSourceQuality ? "ADVANCED DOWNLOAD CONTROLS" : "ADVANCED CONVERSION CONTROLS"
                 color: root.palette.lime || "#c8f24f"
                 font.pixelSize: 9
                 font.weight: Font.Bold
                 font.letterSpacing: 1.2
+            }
+            Text {
+                text: "Fine-tune source streams, output container, codecs, quality, frame rate, encoder and metadata."
+                color: root.palette.muted || "#8d9582"
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
             }
 
             GridLayout {
@@ -195,9 +268,10 @@ ColumnLayout {
                 }
                 Button {
                     text: "Save as preset"
+                    enabled: root.validationMessage.length === 0
                     onClicked: root.savePresetRequested(JSON.stringify(root.options()))
                     background: Rectangle { radius: 8; color: "transparent"; border.color: root.palette.border || "#252b20" }
-                    contentItem: Text { text: parent.text; color: root.palette.muted || "#8d9582"; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; padding: 8 }
+                    contentItem: Text { text: parent.text; color: parent.enabled ? (root.palette.muted || "#8d9582") : (root.palette.subtle || "#626a59"); font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; padding: 8 }
                 }
                 Button {
                     text: "Reset profile"
@@ -212,6 +286,45 @@ ColumnLayout {
                     font.pixelSize: 9
                     wrapMode: Text.WordWrap
                 }
+            }
+        }
+    }
+
+    Rectangle {
+        Layout.fillWidth: true
+        radius: 11
+        color: root.palette.panel || "#171b13"
+        border.color: root.validationMessage.length ? "#c58b3c" : (root.compatibilityNotice.length ? "#8d7542" : root.palette.border || "#252b20")
+        implicitHeight: statusColumn.implicitHeight + 22
+        ColumnLayout {
+            id: statusColumn
+            anchors.fill: parent
+            anchors.margins: 12
+            spacing: 5
+            Text {
+                text: root.validationMessage.length ? "CHECK YOUR SETTINGS"
+                      : (root.compatibilityNotice.length ? "COMPATIBILITY NOTE" : "OUTPUT SUMMARY")
+                color: root.validationMessage.length ? "#e7ad58"
+                      : (root.compatibilityNotice.length ? "#d8bd79" : (root.palette.lime || "#c8f24f"))
+                font.pixelSize: 9
+                font.weight: Font.Bold
+                font.letterSpacing: 1
+            }
+            Text {
+                text: root.validationMessage.length ? root.validationMessage
+                      : (root.compatibilityNotice.length ? root.compatibilityNotice : root.outputSummary)
+                color: root.palette.text || "#e9ece4"
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
+            }
+            Text {
+                visible: !root.validationMessage.length && !root.compatibilityNotice.length
+                text: "These settings are applied to every supported URL added in this batch."
+                color: root.palette.subtle || "#626a59"
+                font.pixelSize: 9
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
             }
         }
     }
