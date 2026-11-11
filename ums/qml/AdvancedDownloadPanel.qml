@@ -34,6 +34,8 @@ ColumnLayout {
                 return mode + " mode needs a video bitrate, for example 2500k."
             if (videoRate && !/^\d+(?:\.\d+)?\s*[kKmMgG]?$/.test(videoRate))
                 return "Video bitrate must look like 2500k, 2M, or 192k."
+            if (videoRate && Number.parseFloat(videoRate) <= 0)
+                return "Video bitrate must be greater than zero."
             var profile = String(profileName.text || "").trim()
             if (profile && !/^[A-Za-z0-9_.-]{1,32}$/.test(profile))
                 return "Codec profile may contain only letters, numbers, dots, underscores and hyphens."
@@ -70,6 +72,8 @@ ColumnLayout {
             var audioRate = String(audioBitrate.text || "").trim()
             if (audioRate && !/^\d+(?:\.\d+)?\s*[kKmMgG]?$/.test(audioRate))
                 return "Audio bitrate must look like 192k or 1M."
+            if (audioRate && Number.parseFloat(audioRate) <= 0)
+                return "Audio bitrate must be greater than zero."
         }
         return ""
     }
