@@ -32,6 +32,8 @@ class AdvancedDownloaderQmlTests(unittest.TestCase):
             "\n".join(error.toString() for error in component.errors()),
         )
         self.assertEqual(panel.property("selectedPreset"), "Best Available Quality")
+        self.assertEqual(panel.property("validationMessage"), "")
+        self.assertTrue(panel.property("outputSummary"))
         panel.deleteLater()
 
 
