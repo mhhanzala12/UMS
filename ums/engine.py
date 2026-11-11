@@ -18,6 +18,7 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 from .config import APP_DIR
+from .cookie_utils import _extract_info_with_cookie_fallback, _run_with_cookie_fallback
 
 _LOG = logging.getLogger(__name__)
 
@@ -287,10 +288,25 @@ def analyze_url(url: str, cancel_event: Optional[threading.Event] = None, settin
         "extractor_retries": 2,
     }
     opts.update(network_options(settings))
+    cookie_fallback = {"used": False}
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info = _extract_info_with_cookie_fallback(
+            yt_dlp,
+            opts,
+            url,
+            download=False,
+            log_cb=_LOG.warning,
+            fallback_state=cookie_fallback,
+            task_label="URL analysis",
+        )
     except Exception as exc:
+        if cookie_fallback["used"]:
+            raise MediaError(
+                "The browser cookie database could not be read, and URL analysis also failed "
+                "after retrying without browser cookies. Close the browser fully or turn off "
+                "Browser cookies in Settings if this source requires a signed-in session. "
+                f"Details: {exc}"
+            ) from exc
         raise MediaError(f"Could not inspect this URL: {exc}") from exc
     if not info:
         raise MediaError("The source did not return media information.")
@@ -1196,14 +1212,32 @@ def download_and_process(url: str, output_dir: str, options: dict, job_id: str,
         ydl_opts["ffmpeg_location"] = str(Path(ffmpeg_path).expanduser())
     if log_cb:
         log_cb("Starting yt-dlp. Downloads are processed locally.")
-    try:
+    cookie_fallback = {"used": False}
+
+    def run_download():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
+
+    try:
+        _run_with_cookie_fallback(
+            ydl_opts,
+            run_download,
+            log_cb=log_cb,
+            fallback_state=cookie_fallback,
+            task_label="download",
+        )
     except CancelledError:
         shutil.rmtree(work_dir, ignore_errors=True)  # don't leak partial downloads on cancel
         raise
     except Exception as exc:
         shutil.rmtree(work_dir, ignore_errors=True)
+        if cookie_fallback["used"]:
+            raise MediaError(
+                "The selected browser's cookie database could not be read, so UMS retried "
+                "this download without browser cookies; the retry also failed. Close the "
+                "browser fully or turn off Browser cookies in Settings if this source "
+                f"requires a signed-in session. Details: {exc}"
+            ) from exc
         raise MediaError(f"yt-dlp download failed: {exc}") from exc
     try:
         _check_cancel(cancel_event)
