@@ -331,16 +331,16 @@ class AppBridge(QObject):
         self._last_analysis = clean
         self.analysisReady.emit(json.dumps(clean, ensure_ascii=False))
 
-    def _enqueue_download(self, url: str, options: dict):
+    def _enqueue_download(self, url: str, options: dict) -> bool:
         url = str(url or "").strip()
         if not is_http_url(url):
             self._notify("Paste a valid http:// or https:// media URL with a hostname.")
-            return
+            return False
         try:
             clean_options = sanitize_download_options(options)
         except ValueError as exc:
             self._notify(f"Invalid downloader options: {exc}")
-            return
+            return False
         media = self._last_analysis if self._last_analysis_url == url else {}
         self._new_task(
             "download", media.get("title") or url, clean_options, url=url,
@@ -350,8 +350,9 @@ class AppBridge(QObject):
             view_count=media.get("view_count"),
             upload_date=media.get("upload_date") or "",
         )
+        return True
 
-    @Slot(str, str, str)
+    @Slot(str, str, str, result=bool)
     def enqueueDownload(self, url, preset_name, container="Original"):
         """Compatibility entry point for older QML builds and external callers."""
         options = dict(
@@ -361,17 +362,17 @@ class AppBridge(QObject):
         )
         selected_container = str(container or "Original").strip().lower()
         options["container"] = "original" if selected_container == "original" else selected_container
-        self._enqueue_download(url, options)
+        return self._enqueue_download(url, options)
 
-    @Slot(str, str)
+    @Slot(str, str, result=bool)
     def enqueueDownloadWithOptions(self, url, options_json):
         """Queue a download with the complete modern advanced-control payload."""
         try:
             options = json.loads(str(options_json or "{}"))
         except (json.JSONDecodeError, TypeError, ValueError):
             self._notify("Could not read the advanced downloader options.")
-            return
-        self._enqueue_download(url, options)
+            return False
+        return self._enqueue_download(url, options)
 
     @Slot(str, result=str)
     def saveCustomPreset(self, options_json):
@@ -417,21 +418,22 @@ class AppBridge(QObject):
         self._notify(f"Saved custom preset: {name}")
         return name
 
-    @Slot(str)
+    @Slot(str, result=bool)
     def enqueueSpotify(self, url):
         url = str(url).strip()
         if self.spotify_worker and self.spotify_worker.isRunning():
             self._notify("Spotify link resolution is already running.")
-            return
+            return False
         if not url:
             self._notify("Paste a Spotify track, album, or playlist URL.")
-            return
+            return False
         self.statusChanged.emit(json.dumps({"spotify": "Resolving public Spotify metadata…"}))
         self.spotify_worker = SpotifyResolveWorker(url, self)
         self.spotify_worker.completed.connect(self._spotify_resolved)
         self.spotify_worker.failed.connect(self._notify)
         self.spotify_worker.finished.connect(self._cleanup_finished_worker)
         self.spotify_worker.start()
+        return True
 
     def _spotify_resolved(self, collection):
         tracks = collection.get("tracks") or []
