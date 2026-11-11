@@ -41,6 +41,7 @@ from PySide6.QtCore import QThread, Signal
 from .config import APP_DIR, atomic_write_text, load_settings, update_settings
 from .lyrics import format_lrc, lyric_match_score, parse_lrc, parse_ttml
 from .engine import CancelledError, network_options
+from .cookie_utils import _extract_info_with_cookie_fallback
 
 _LOG = logging.getLogger(__name__)
 
@@ -896,13 +897,17 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
     if progress_cb:
         progress_cb(1, "Finding a matching audio source…")
     downloaded: list[str] = []
+    cookie_fallback_state = {"used": False}
     try:
         # Ranking only needs title/uploader/duration, so search with flat extraction:
         # one request instead of fully resolving all five candidate videos.
         search_opts = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": "in_playlist",
                        "ignoreerrors": False, "socket_timeout": 25, **net_options}
-        with yt_dlp.YoutubeDL(search_opts) as search_ydl:
-            search = search_ydl.extract_info(f"ytsearch5:{query}", download=False)
+        search = _extract_info_with_cookie_fallback(
+            yt_dlp, search_opts, f"ytsearch5:{query}", download=False,
+            related_options=(options,), log_cb=log_cb, fallback_state=cookie_fallback_state,
+            task_label="music search",
+        )
         entries = [entry for entry in (search or {}).get("entries") or [] if entry]
         if not entries:
             raise RuntimeError("YouTube search returned no matching tracks.")
@@ -917,8 +922,11 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
             log_cb(f"Best match: {selected.get('title', 'Unknown title')} — {selected.get('uploader') or selected.get('channel') or selected.get('artist') or 'Unknown artist'} (match {score:.0%})")
             if score < 0.38:
                 log_cb("Warning: this is a weak metadata match. Check the downloaded track before keeping it.")
-        with yt_dlp.YoutubeDL(options) as ydl:
-            info = ydl.extract_info(selected_url, download=True)
+        info = _extract_info_with_cookie_fallback(
+            yt_dlp, options, selected_url, download=True,
+            log_cb=log_cb, fallback_state=cookie_fallback_state,
+            task_label="music download",
+        )
         for item in (info or {}).get("requested_downloads") or []:
             filepath = item.get("filepath") or item.get("_filename")
             if filepath and Path(filepath).suffix.lower() in AUDIO_EXTENSIONS and Path(filepath).is_file():
@@ -927,6 +935,13 @@ def run_music_download(query: str, output_dir: str, cancel_event=None,
         if cancel_event and cancel_event.is_set():
             raise CancelledError("Music download cancelled.") from exc
         message = str(exc)
+        if cookie_fallback_state["used"]:
+            raise RuntimeError(
+                "The selected browser's cookie database could not be read, so UMS retried "
+                "without browser cookies; that retry also failed. If this source needs your "
+                "signed-in session, close the browser completely and retry, or turn off "
+                "Browser cookies in Settings. Details: " + message
+            ) from exc
         if "ffmpeg" in message.lower() or "postprocessor" in message.lower():
             raise RuntimeError("Audio was found, but FFmpeg could not convert/tag it. Install FFmpeg and make sure ffmpeg and ffprobe are on PATH.") from exc
         raise RuntimeError(f"Could not download a matching audio source: {message}") from exc

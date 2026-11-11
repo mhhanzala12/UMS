@@ -76,6 +76,7 @@ ApplicationWindow {
     property string searchKind: "All"
     property string spotifyUrl: ""
     property string presetName: "Best Available Quality"
+    property string conversionPresetName: "Balanced Quality and Size"
     property var presets: JSON.parse(bridge.presetsJson())
     property var queueItems: JSON.parse(bridge.queueJson())
     property var settingsData: JSON.parse(bridge.settingsJson())
@@ -86,7 +87,12 @@ ApplicationWindow {
     property var browserProfiles: []
     property var selectedTrack: ({})
     property bool analysisBusy: false
-    property string analysisText: ""
+    property string analysisError: ""
+    property string analysisTargetUrl: ""
+    property string applicationLogText: ""
+    property var analysisData: ({})
+    property var analysisThumbnailList: []
+    property int analysisThumbnailIndex: 0
     property string lyricsTitle: ""
     property string lyricsArtist: ""
     property string lyricsRequestedTitle: ""
@@ -98,6 +104,48 @@ ApplicationWindow {
     property bool lyricsSynchronized: false
     property var lyricsLines: []
 
+    function formatMediaDuration(value) {
+        if (value === null || value === undefined || value === "") return "—"
+        var seconds = Math.max(0, Math.floor(Number(value) || 0))
+        var hours = Math.floor(seconds / 3600)
+        var minutes = Math.floor((seconds % 3600) / 60)
+        var remainder = seconds % 60
+        return hours > 0
+                ? (hours + ":" + (minutes < 10 ? "0" : "") + minutes + ":" + (remainder < 10 ? "0" : "") + remainder)
+                : (minutes + ":" + (remainder < 10 ? "0" : "") + remainder)
+    }
+    function displayCount(value) {
+        if (value === null || value === undefined || value === "") return "—"
+        var number = Number(value)
+        return isNaN(number) ? String(value) : number.toLocaleString()
+    }
+    function displayMediaDate(value) {
+        var date = String(value || "")
+        return date.length === 8 && /^\d{8}$/.test(date)
+                ? date.slice(0, 4) + "-" + date.slice(4, 6) + "-" + date.slice(6, 8)
+                : (date || "—")
+    }
+    function displayMediaSize(value) {
+        var bytes = Number(value)
+        if (!isFinite(bytes) || bytes <= 0) return "—"
+        var units = ["B", "KB", "MB", "GB", "TB"]
+        var index = 0
+        while (bytes >= 1024 && index < units.length - 1) {
+            bytes /= 1024
+            index++
+        }
+        return (index === 0 ? Math.round(bytes) : bytes.toFixed(bytes >= 100 ? 0 : 1)) + " " + units[index]
+    }
+    function buildAnalysisThumbnailList(data) {
+        var urls = []
+        if (data && data.thumbnail) urls.push(String(data.thumbnail))
+        var variants = data && data.thumbnails ? data.thumbnails : []
+        for (var i = 0; i < variants.length; i++) {
+            var value = typeof variants[i] === "string" ? variants[i] : variants[i].url
+            if (value && urls.indexOf(String(value)) < 0) urls.push(String(value))
+        }
+        return urls
+    }
     function normalizeTrackText(value) {
         return String(value || "").toLowerCase()
                 .replace(/\([^)]*\)/g, " ")
@@ -199,7 +247,9 @@ ApplicationWindow {
             if (!g) {
                 g = { gid: gid, grouped: !!t.group_id,
                       name: t.group_name || (mt.title ? ((mt.artist ? mt.artist + " — " : "") + mt.title) : String(t.name || "Download")),
-                      cover: t.group_cover || mt.cover || "",
+                      cover: t.group_cover || mt.cover || t.thumbnail || "",
+                      uploader: t.uploader || mt.artist || "",
+                      duration: t.duration || mt.duration || 0,
                       total: 0, done: 0, failed: 0, active: 0, cancelled: 0, pctSum: 0, errorText: "", signIn: false, rows: [] }
                 map[gid] = g
                 order.push(gid)
@@ -229,7 +279,8 @@ ApplicationWindow {
             return downloadTab === "All" || (downloadTab === "Downloading" && g.active > 0) || (downloadTab === "Completed" && g.active === 0)
         })
         syncListModel(downloadGroupsModel, shown.map(function(g) {
-            return { gid: g.gid, grouped: g.grouped, name: g.name, cover: g.cover, total: g.total, done: g.done,
+            return { gid: g.gid, grouped: g.grouped, name: g.name, cover: g.cover,
+                     uploader: g.uploader, duration: g.duration, total: g.total, done: g.done,
                      failed: g.failed, active: g.active, cancelled: g.cancelled, pct: Math.round(g.pctSum / Math.max(1, g.total)),
                      errorText: g.errorText, signIn: g.signIn, rowsJson: JSON.stringify(g.rows) }
         }))
@@ -294,6 +345,10 @@ ApplicationWindow {
         target: bridge
         function onQueueChanged() { queueItems = JSON.parse(bridge.queueJson())
  rebuildDownloads() }
+        function onLogUpdated() {
+            if (logDialog.visible)
+                applicationLogText = bridge.readLog()
+        }
         function onPresetsChanged(value) { presets = JSON.parse(value) }
         function onSettingsChanged(value) { settingsData = JSON.parse(value) }
         function onSearchResults(value) { searchItems = JSON.parse(value) }
@@ -342,16 +397,42 @@ ApplicationWindow {
             if (data.state !== undefined) playerPlaying = data.state === 1
             refreshLyricsSyncState()
         }
-        function onAnalysisReady(value) { analysisBusy = false
- analysisText = JSON.stringify(JSON.parse(value), null, 2)
- analysisDialog.open() }
+        function onAnalysisReady(value) {
+            try {
+                analysisData = JSON.parse(value)
+                analysisThumbnailList = buildAnalysisThumbnailList(analysisData)
+                analysisThumbnailIndex = 0
+                analysisError = ""
+                analysisBusy = false
+                analysisDialog.open()
+            } catch (error) {
+                analysisData = ({})
+                analysisThumbnailList = []
+                analysisBusy = false
+                analysisError = "The source returned invalid metadata. Please analyze the URL again."
+                analysisDialog.open()
+            }
+        }
+        function onAnalysisFailed(value) {
+            analysisBusy = false
+            analysisData = ({})
+            analysisThumbnailList = []
+            analysisError = String(value || "The source could not be analyzed.")
+            analysisDialog.open()
+        }
         function onStatusChanged(value) {
-            try { var data = JSON.parse(value)
- if (data.analysis) analysisBusy = true
- if (data.spotify) toast.showMessage(data.spotify)
- if (data.yt_dlp) diagnosticsData = data
- if (data.browser_profiles) browserProfiles = data.browser_profiles }
-            catch (e) {}
+            try {
+                var data = JSON.parse(value)
+                if (data.analysis) {
+                    analysisBusy = true
+                    analysisError = ""
+                    analysisData = ({})
+                    analysisDialog.open()
+                }
+                if (data.spotify) toast.showMessage(data.spotify)
+                if (data.yt_dlp) diagnosticsData = data
+                if (data.browser_profiles) browserProfiles = data.browser_profiles
+            } catch (e) {}
         }
         function onErrorRaised(value) { searchBusy = false
  toast.showMessage(value, true) }
@@ -1499,14 +1580,29 @@ ApplicationWindow {
                         RowLayout {
                             Layout.fillWidth: true; spacing: 10
                             Button {
-                                text: "Analyze first URL"
+                                text: window.analysisBusy ? "Analyzing…" : "Analyze URL"
+                                enabled: !window.analysisBusy
                                 onClicked: {
                                     var urls = downloadUrls.text.split(/\r?\n/).map(function(v){return v.trim()}).filter(function(v){return v.length})
-                                    if (urls.length) bridge.analyzeUrl(urls[0], "download")
-                                    else toast.showMessage("Paste a media URL first.", true)
+                                    if (!urls.length) {
+                                        toast.showMessage("Paste a media URL first.", true)
+                                        return
+                                    }
+                                    if (!/^https?:\/\/[^\/\s?#]+(?:[\/?#]|$)/i.test(urls[0])) {
+                                        toast.showMessage("Enter a complete http:// or https:// media URL.", true)
+                                        return
+                                    }
+                                    window.analysisTargetUrl = urls[0]
+                                    window.analysisBusy = true
+                                    window.analysisError = ""
+                                    window.analysisData = ({})
+                                    window.analysisThumbnailList = []
+                                    window.analysisThumbnailIndex = 0
+                                    analysisDialog.open()
+                                    bridge.analyzeUrl(urls[0], "download")
                                 }
-                                background: Rectangle { radius: 8; color: themeColors.panel2; border.color: themeColors.border }
-                                contentItem: Text { text: parent.text; color: themeColors.text; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; padding: 8 }
+                                background: Rectangle { radius: 8; color: parent.enabled ? themeColors.panel2 : themeColors.panel3; border.color: parent.enabled ? themeColors.border : "transparent" }
+                                contentItem: Text { text: parent.text; color: parent.enabled ? themeColors.text : themeColors.subtle; font.pixelSize: 10; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; padding: 8 }
                             }
                             Item { Layout.fillWidth: true }
                             Button {
@@ -1514,13 +1610,42 @@ ApplicationWindow {
                                 onClicked: {
                                     var urls = downloadUrls.text.split(/\r?\n/).map(function(v){return v.trim()}).filter(function(v){return v.length})
                                     if (!urls.length) { toast.showMessage("Paste one or more media URLs first.", true); return }
-                                    for (var i = 0; i < urls.length; i++) {
-                                        if (/open\.spotify\.com\/(track|album|playlist)\//i.test(urls[i])) bridge.enqueueSpotify(urls[i])
-                                        else bridge.enqueueDownload(urls[i], downloadPreset.currentText, downloadContainer.currentText)
+                                    if (urls.length > 100) {
+                                        toast.showMessage("Please add at most 100 URLs per batch.", true)
+                                        return
                                     }
-                                    toast.showMessage("Added " + urls.length + " URL(s) to the queue.")
-                                    downloadUrls.text = ""
-                                    setPage("Downloads")
+                                    if (advancedDownloadPanel.validationMessage.length) {
+                                        toast.showMessage(advancedDownloadPanel.validationMessage, true)
+                                        return
+                                    }
+                                    var optionsJson = JSON.stringify(advancedDownloadPanel.options())
+                                    var added = 0
+                                    var skippedUrls = []
+                                    for (var i = 0; i < urls.length; i++) {
+                                        var accepted = false
+                                        if (/open\.spotify\.com\/(track|album|playlist)\//i.test(urls[i]))
+                                            accepted = bridge.enqueueSpotify(urls[i])
+                                        else
+                                            accepted = bridge.enqueueDownloadWithOptions(urls[i], optionsJson)
+                                        if (accepted)
+                                            added++
+                                        else
+                                            skippedUrls.push(urls[i])
+                                    }
+                                    if (added > 0) {
+                                        toast.showMessage(
+                                            "Added " + added + " item(s)" + (skippedUrls.length ? " · skipped " + skippedUrls.length : "") + "."
+                                        )
+                                        // Keep rejected links in the editor so the user can correct
+                                        // them instead of silently losing them.
+                                        downloadUrls.text = skippedUrls.join("\n")
+                                        setPage("Downloads")
+                                    } else {
+                                        toast.showMessage(
+                                            "Nothing was added. Check the URLs and downloader settings.",
+                                            true
+                                        )
+                                    }
                                 }
                                 background: Rectangle { radius: 8; color: themeColors.lime }
                                 contentItem: Text { text: parent.text; color: "#14190b"; font.pixelSize: 10; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; padding: 9 }
@@ -1528,47 +1653,17 @@ ApplicationWindow {
                         }
                     }
                 }
-                Rectangle {
-                    Layout.fillWidth: true; radius: 12; color: themeColors.panel; border.color: themeColors.border
-                    implicitHeight: 145
-                    ColumnLayout {
-                        anchors.fill: parent; anchors.margins: 17; spacing: 10
-                        Text { text: "DOWNLOAD PROFILE"; color: themeColors.lime; font.pixelSize: 9; font.letterSpacing: 1.2 }
-                        RowLayout {
-                            Layout.fillWidth: true; spacing: 12
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 5
-                                Text { text: "Quality preset"; color: themeColors.muted; font.pixelSize: 10 }
-                                ComboBox {
-                                    id: downloadPreset
-                                    Layout.fillWidth: true
-                                    // Keep the Download Profile list focused on the five supported profiles.
-                                    model: [
-                                        "Best Available Quality",
-                                        "Audio Only",
-                                        "Lossless Audio",
-                                        "3GP Legacy Mobile",
-                                        "MP4 Universal Compatibility"
-                                    ]
-                                    currentIndex: Math.max(0, model.indexOf(presetName))
-                                    onActivated: presetName = currentText
-                                    background: Rectangle { radius: 7; color: themeColors.panel2; border.color: themeColors.border }
-                                    contentItem: Text { leftPadding: 10; text: downloadPreset.displayText; color: themeColors.text; font.pixelSize: 10; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
-                                }
-                            }
-                            ColumnLayout {
-                                Layout.fillWidth: true; spacing: 5
-                                Text { text: "Output container"; color: themeColors.muted; font.pixelSize: 10 }
-                                ComboBox {
-                                    id: downloadContainer
-                                    Layout.fillWidth: true
-                                    model: ["Original","MP4","MKV","WebM","MOV","AVI","MP3","M4A","AAC","Opus","OGG","FLAC","WAV","AIFF","WMA"]
-                                    background: Rectangle { radius: 7; color: themeColors.panel2; border.color: themeColors.border }
-                                    contentItem: Text { leftPadding: 10; text: downloadContainer.displayText; color: themeColors.text; font.pixelSize: 10; verticalAlignment: Text.AlignVCenter }
-                                }
-                            }
-                        }
-                        Text { text: "For full codec, subtitle, FPS, resolution, and encoder controls, use the classic advanced Downloader window."; color: themeColors.subtle; font.pixelSize: 9; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                AdvancedDownloadPanel {
+                    id: advancedDownloadPanel
+                    Layout.fillWidth: true
+                    palette: window.themeColors
+                    presets: window.presets
+                    selectedPreset: window.presetName
+                    onPresetChanged: function(name) { window.presetName = name }
+                    onSavePresetRequested: function(optionsJson) {
+                        var savedName = bridge.saveCustomPreset(optionsJson)
+                        if (savedName)
+                            window.presetName = savedName
                     }
                 }
             }
@@ -1692,6 +1787,12 @@ ApplicationWindow {
                                         Layout.fillWidth: true
                                         spacing: 5
                                         Text { Layout.fillWidth: true; text: name; color: themeColors.text; font.pixelSize: 14; font.weight: Font.Bold; elide: Text.ElideRight }
+                                        Text {
+                                            visible: uploader.length > 0 || duration > 0
+                                            text: uploader + (duration > 0 ? (uploader.length > 0 ? " · " : "") + window.formatMediaDuration(duration) : "")
+                                            color: themeColors.subtle; font.pixelSize: 11
+                                            elide: Text.ElideRight; Layout.fillWidth: true
+                                        }
                                         RowLayout {
                                             spacing: 7
                                             Icon { name: active > 0 ? "download" : (failed > 0 && done === 0 ? "alert" : "check"); color: active > 0 ? themeColors.lime : (failed > 0 && done === 0 ? themeColors.danger : themeColors.lime); implicitWidth: 13; implicitHeight: 13 }
@@ -2203,8 +2304,9 @@ ApplicationWindow {
  radius: 12
  color: themeColors.panel
  border.color: themeColors.border
- implicitHeight: 270
+ implicitHeight: conversionLayout.implicitHeight + 36
                     ColumnLayout {
+                        id: conversionLayout
                         anchors.fill: parent
  anchors.margins: 18
  spacing: 13
@@ -2234,46 +2336,35 @@ ApplicationWindow {
  verticalAlignment: Text.AlignVCenter
  padding: 8 } }
                         }
-                        RowLayout {
-                            ComboBox { id: outputContainer
- Layout.fillWidth: true
- model: ["mp4","mkv","webm","mov","avi","mp3","m4a","flac","wav","opus"]
- background: Rectangle { radius: 7
- color: themeColors.panel2
- border.color: themeColors.border }
- contentItem: Text { leftPadding: 10
- text: outputContainer.displayText
- color: themeColors.text
- font.pixelSize: 10
- verticalAlignment: Text.AlignVCenter } }
-                            ComboBox { id: outputVideoCodec
- Layout.fillWidth: true
- model: ["copy","h264","hevc","av1","vp9","vp8"]
- background: Rectangle { radius: 7
- color: themeColors.panel2
- border.color: themeColors.border }
- contentItem: Text { leftPadding: 10
- text: outputVideoCodec.displayText
- color: themeColors.text
- font.pixelSize: 10
- verticalAlignment: Text.AlignVCenter } }
-                            ComboBox { id: outputAudioCodec
- Layout.fillWidth: true
- model: ["copy","aac","mp3","opus","vorbis","flac","alac"]
- background: Rectangle { radius: 7
- color: themeColors.panel2
- border.color: themeColors.border }
- contentItem: Text { leftPadding: 10
- text: outputAudioCodec.displayText
- color: themeColors.text
- font.pixelSize: 10
- verticalAlignment: Text.AlignVCenter } }
+                        AdvancedDownloadPanel {
+                            id: conversionAdvancedPanel
+                            Layout.fillWidth: true
+                            palette: window.themeColors
+                            presets: window.presets
+                            selectedPreset: window.conversionPresetName
+                            showSourceQuality: false
+                            onPresetChanged: function(name) { window.conversionPresetName = name }
+                            onSavePresetRequested: function(optionsJson) {
+                                var savedName = bridge.saveCustomPreset(optionsJson)
+                                if (savedName)
+                                    window.conversionPresetName = savedName
+                            }
                         }
-                        Text { text: "Output container  ·  Video codec  ·  Audio codec"
- color: themeColors.subtle
- font.pixelSize: 9 }
                         Button { text: "Add conversion to queue  →"
- onClicked: bridge.enqueueConversionWithOptions(conversionSource.text, outputContainer.currentText, outputVideoCodec.currentText, outputAudioCodec.currentText)
+ onClicked: {
+      if (conversionAdvancedPanel.validationMessage.length) {
+          toast.showMessage(conversionAdvancedPanel.validationMessage, true)
+          return
+      }
+      var accepted = bridge.enqueueConversionWithAdvancedOptions(
+          conversionSource.text,
+          JSON.stringify(conversionAdvancedPanel.options())
+      )
+      if (accepted) {
+          toast.showMessage("Conversion added to the queue.")
+          setPage("Downloads")
+      }
+  }
  background: Rectangle { radius: 8
  color: themeColors.lime }
  contentItem: Text { text: parent.text
@@ -2514,6 +2605,48 @@ ApplicationWindow {
                     }
 
                     SettingsCard {
+                        icon: "file-text"
+                        title: "Application logs"
+                        description: "View or export startup, QML, worker, FFmpeg, and download diagnostics. Logs rotate automatically to limit disk use. Review URLs and local paths before sharing."
+                        trailing: [
+                            Btn {
+                                text: "View logs"
+                                icon: "file-text"
+                                implicitHeight: 34
+                                onClicked: {
+                                    applicationLogText = bridge.readLog()
+                                    logDialog.open()
+                                }
+                            },
+                            Btn {
+                                text: "Export log"
+                                icon: "download"
+                                primary: true
+                                implicitHeight: 34
+                                onClicked: bridge.exportLog()
+                            }
+                        ]
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Text {
+                                text: bridge.logPath()
+                                color: themeColors.subtle
+                                font.pixelSize: 10
+                                font.family: "monospace"
+                                elide: Text.ElideMiddle
+                                Layout.fillWidth: true
+                            }
+                            Btn {
+                                text: "Open file"
+                                icon: "external-link"
+                                implicitHeight: 32
+                                onClicked: bridge.openLogFile()
+                            }
+                        }
+                    }
+
+                    SettingsCard {
                         icon: "sparkles"
                         title: "About Universal Media Studio"
                         description: "App version 0.3.0. Update check opens the project releases page in your browser."
@@ -2528,18 +2661,639 @@ ApplicationWindow {
     Dialog {
         id: analysisDialog
         modal: true
+        parent: Overlay.overlay
         anchors.centerIn: parent
-        width: Math.min(650, window.width - 60)
-        title: "Media information"
-        standardButtons: Dialog.Ok
-        background: Rectangle { color: themeColors.panel
- radius: 12
- border.color: themeColors.border }
-        contentItem: Text { text: analysisText
- color: themeColors.text
- wrapMode: Text.Wrap
- padding: 18 }
+        width: Math.min(940, window.width - 32)
+        height: Math.min(720, window.height - 32)
+        padding: 0
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        background: Rectangle {
+            color: themeColors.panel
+            radius: 18
+            border.color: themeColors.border
+            border.width: 1
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 0
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 18
+                spacing: 12
+
+                Rectangle {
+                    Layout.preferredWidth: 42
+                    Layout.preferredHeight: 42
+                    radius: 11
+                    color: themeColors.activeBg
+                    Icon {
+                        anchors.centerIn: parent
+                        name: "search"
+                        color: themeColors.lime
+                        implicitWidth: 20
+                        implicitHeight: 20
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 3
+                    Text {
+                        text: "MEDIA INSPECTOR"
+                        color: themeColors.lime
+                        font.pixelSize: 9
+                        font.weight: Font.Bold
+                        font.letterSpacing: 1.5
+                    }
+                    Text {
+                        text: window.analysisBusy ? "Analyzing URL" :
+                              (window.analysisError.length ? "Couldn’t inspect this source" : "Media information")
+                        color: themeColors.text
+                        font.pixelSize: 19
+                        font.weight: Font.Bold
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        text: window.analysisBusy
+                              ? "Fetching source details and available formats"
+                              : (window.analysisError.length
+                                 ? "Check the URL or try again."
+                                 : (window.analysisData.extractor || "Media source") +
+                                   "  ·  " + (window.analysisData.formats || []).length + " formats found")
+                        color: themeColors.muted
+                        font.pixelSize: 10
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                }
+
+                Rectangle {
+                    visible: window.analysisBusy
+                    radius: 9
+                    color: themeColors.panel2
+                    border.color: themeColors.border
+                    Layout.preferredWidth: 88
+                    Layout.preferredHeight: 30
+                    RowLayout {
+                        anchors.centerIn: parent
+                        spacing: 6
+                        BusyIndicator {
+                            running: window.analysisBusy
+                            Layout.preferredWidth: 14
+                            Layout.preferredHeight: 14
+                        }
+                        Text { text: "Working"; color: themeColors.muted; font.pixelSize: 10 }
+                    }
+                }
+
+                Btn {
+                    text: "Close"
+                    icon: "x"
+                    implicitHeight: 32
+                    onClicked: analysisDialog.close()
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: themeColors.border }
+
+            Item {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 240
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 22
+                    spacing: 13
+                    visible: window.analysisBusy
+
+                    Item { Layout.fillHeight: true }
+                    BusyIndicator {
+                        running: window.analysisBusy
+                        Layout.preferredWidth: 54
+                        Layout.preferredHeight: 54
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    Text {
+                        text: "Inspecting source metadata"
+                        color: themeColors.text
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    Text {
+                        text: window.analysisTargetUrl
+                        color: themeColors.subtle
+                        font.pixelSize: 10
+                        elide: Text.ElideMiddle
+                        horizontalAlignment: Text.AlignHCenter
+                        Layout.fillWidth: true
+                    }
+                    Text {
+                        text: "Reading the title, channel, preview image, media properties and available formats. No media is being downloaded."
+                        color: themeColors.muted
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
+                        Layout.maximumWidth: 470
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    Item { Layout.fillHeight: true }
+                }
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 24
+                    spacing: 13
+                    visible: !window.analysisBusy && window.analysisError.length > 0
+
+                    Item { Layout.fillHeight: true }
+                    Rectangle {
+                        Layout.preferredWidth: 54
+                        Layout.preferredHeight: 54
+                        radius: 15
+                        color: "#2b1716"
+                        Layout.alignment: Qt.AlignHCenter
+                        Icon { anchors.centerIn: parent; name: "alert"; color: themeColors.danger; implicitWidth: 24; implicitHeight: 24 }
+                    }
+                    Text {
+                        text: "Analysis failed"
+                        color: themeColors.text
+                        font.pixelSize: 17
+                        font.weight: Font.Bold
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    Text {
+                        text: window.analysisError
+                        color: themeColors.danger
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
+                        Layout.maximumWidth: 620
+                        Layout.alignment: Qt.AlignHCenter
+                    }
+                    RowLayout {
+                        Layout.alignment: Qt.AlignHCenter
+                        spacing: 8
+                        Btn {
+                            text: "Try again"
+                            icon: "refresh"
+                            primary: true
+                            implicitHeight: 34
+                            enabled: window.analysisTargetUrl.length > 0
+                            onClicked: {
+                                window.analysisBusy = true
+                                window.analysisError = ""
+                                window.analysisData = ({})
+                                window.analysisThumbnailList = []
+                                window.analysisThumbnailIndex = 0
+                                bridge.analyzeUrl(window.analysisTargetUrl, "download")
+                            }
+                        }
+                        Btn { text: "Close"; implicitHeight: 34; onClicked: analysisDialog.close() }
+                    }
+                    Item { Layout.fillHeight: true }
+                }
+
+                ScrollView {
+                    id: analysisScroll
+                    anchors.fill: parent
+                    anchors.margins: 14
+                    clip: true
+                    visible: !window.analysisBusy && window.analysisError.length === 0 && !!window.analysisData.title
+                    // Give the scroll content the viewport width explicitly.
+                    // Otherwise implicitWidth <-> parent.width can collapse
+                    // the inspector and make all child layouts overlap.
+                    contentWidth: availableWidth
+                    ScrollBar.vertical: ScrollBar { active: true }
+
+                    ColumnLayout {
+                        id: analysisContent
+                        width: analysisScroll.availableWidth
+                        spacing: 12
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: analysisScroll.availableWidth
+                            radius: 13
+                            color: themeColors.panel2
+                            border.color: themeColors.border
+                            implicitHeight: 204
+                            clip: true
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.margins: 12
+                                spacing: 16
+
+                                Rectangle {
+                                    Layout.minimumWidth: 180
+                                    Layout.maximumWidth: 300
+                                    Layout.preferredWidth: Math.min(300, Math.max(180, analysisContent.width * 0.34))
+                                    Layout.preferredHeight: Layout.preferredWidth * 9 / 16
+                                    Layout.fillHeight: true
+                                    radius: 9
+                                    color: themeColors.panel3
+                                    border.color: themeColors.border
+                                    clip: true
+
+                                    Image {
+                                        id: preview
+                                        anchors.fill: parent
+                                        source: window.analysisThumbnailList.length > 0
+                                                ? window.analysisThumbnailList[window.analysisThumbnailIndex]
+                                                : (window.analysisData.thumbnail || "")
+                                        asynchronous: true
+                                        cache: true
+                                        sourceSize.width: 900
+                                        sourceSize.height: 506
+                                        fillMode: Image.PreserveAspectCrop
+                                        visible: status === Image.Ready
+                                        onStatusChanged: {
+                                            if (status === Image.Error &&
+                                                window.analysisThumbnailIndex + 1 < window.analysisThumbnailList.length) {
+                                                window.analysisThumbnailIndex++
+                                            }
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        anchors.centerIn: parent
+                                        visible: preview.status !== Image.Ready
+                                        spacing: 7
+                                        Rectangle {
+                                            Layout.preferredWidth: 38
+                                            Layout.preferredHeight: 38
+                                            radius: 11
+                                            color: themeColors.panel2
+                                            Layout.alignment: Qt.AlignHCenter
+                                            Icon { anchors.centerIn: parent; name: "image"; color: themeColors.subtle; implicitWidth: 19; implicitHeight: 19 }
+                                        }
+                                        Text {
+                                            text: preview.status === Image.Loading ? "Loading preview…" : "Preview unavailable"
+                                            color: themeColors.subtle
+                                            font.pixelSize: 10
+                                            Layout.alignment: Qt.AlignHCenter
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        anchors.left: parent.left
+                                        anchors.bottom: parent.bottom
+                                        anchors.margins: 9
+                                        radius: 6
+                                        color: "#b0000000"
+                                        width: sourceBadge.implicitWidth + 14
+                                        height: 23
+                                        Text {
+                                            id: sourceBadge
+                                            anchors.centerIn: parent
+                                            text: window.analysisData.extractor || "MEDIA"
+                                            color: "#ffffff"
+                                            font.pixelSize: 9
+                                            font.weight: Font.Bold
+                                        }
+                                    }
+                                }
+
+                                ColumnLayout {
+                                    Layout.minimumWidth: 0
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    Layout.alignment: Qt.AlignVCenter
+                                    spacing: 8
+
+                                    Text {
+                                        Layout.minimumWidth: 0
+                                        text: window.analysisData.title || "Untitled media"
+                                        color: themeColors.text
+                                        font.pixelSize: 18
+                                        font.weight: Font.Bold
+                                        wrapMode: Text.WordWrap
+                                        maximumLineCount: 3
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Text {
+                                        Layout.minimumWidth: 0
+                                        text: window.analysisData.uploader || window.analysisData.channel ||
+                                              window.analysisData.creator || "Unknown creator"
+                                        color: themeColors.muted
+                                        font.pixelSize: 11
+                                        wrapMode: Text.WordWrap
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Text {
+                                        Layout.minimumWidth: 0
+                                        text: window.analysisData.channel_url || window.analysisData.webpage_url || ""
+                                        color: themeColors.subtle
+                                        font.pixelSize: 9
+                                        elide: Text.ElideMiddle
+                                        Layout.fillWidth: true
+                                    }
+
+                                    RowLayout {
+                                        spacing: 7
+                                        Rectangle {
+                                            radius: 6
+                                            color: themeColors.activeBg
+                                            implicitWidth: liveLabel.implicitWidth + 14
+                                            implicitHeight: 23
+                                            Text {
+                                                id: liveLabel
+                                                anchors.centerIn: parent
+                                                text: window.analysisData.is_live ? "LIVE" : (window.analysisData.ext || "MEDIA").toUpperCase()
+                                                color: themeColors.lime
+                                                font.pixelSize: 9
+                                                font.weight: Font.Bold
+                                            }
+                                        }
+                                        Text {
+                                            text: window.analysisData.resolution || "Resolution not supplied"
+                                            color: themeColors.muted
+                                            font.pixelSize: 10
+                                        }
+                                        Text {
+                                            visible: Number(window.analysisData.fps) > 0
+                                            text: "· " + Number(window.analysisData.fps).toFixed(2).replace(/\.00$/, "") + " FPS"
+                                            color: themeColors.muted
+                                            font.pixelSize: 10
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Flow {
+                            id: analysisMetadataFlow
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: analysisScroll.availableWidth
+                            Layout.preferredHeight: Math.ceil(metadataRepeater.count / metadataColumns) * 66 - 9
+                            spacing: 9
+                            property int metadataColumns: analysisDialog.width < 680 ? 2 : 4
+
+                            Repeater {
+                                id: metadataRepeater
+                                model: [
+                                    {label: "DURATION", value: window.analysisData.is_live ? "Live" : window.formatMediaDuration(window.analysisData.duration)},
+                                    {label: "RESOLUTION", value: window.analysisData.resolution || "—"},
+                                    {label: "FRAME RATE", value: Number(window.analysisData.fps) > 0 ? Number(window.analysisData.fps).toFixed(2).replace(/\.00$/, "") + " FPS" : "—"},
+                                    {label: "VIEWS", value: window.displayCount(window.analysisData.view_count)},
+                                    {label: "LIKES", value: window.displayCount(window.analysisData.like_count)},
+                                    {label: "PUBLISHED", value: window.displayMediaDate(window.analysisData.upload_date || window.analysisData.release_date)},
+                                    {label: "FILE SIZE", value: window.displayMediaSize(window.analysisData.filesize)},
+                                    {label: "VIDEO CODEC", value: window.analysisData.vcodec || "—"},
+                                    {label: "AUDIO CODEC", value: window.analysisData.acodec || "—"},
+                                    {label: "FORMATS", value: String((window.analysisData.formats || []).length)},
+                                    {label: "SUBTITLES", value: String((window.analysisData.subtitles || []).length + (window.analysisData.automatic_captions || []).length)},
+                                    {label: "MEDIA ID", value: window.analysisData.id || "—"}
+                                ]
+                                delegate: Rectangle {
+                                    width: Math.max(1, (analysisMetadataFlow.width - analysisMetadataFlow.spacing * (analysisMetadataFlow.metadataColumns - 1)) / analysisMetadataFlow.metadataColumns)
+                                    height: 57
+                                    radius: 9
+                                    color: themeColors.panel2
+                                    border.color: themeColors.border
+                                    Column {
+                                        anchors.fill: parent
+                                        anchors.margins: 10
+                                        spacing: 4
+                                        Text {
+                                            width: parent.width
+                                            text: modelData.label
+                                            color: themeColors.subtle
+                                            font.pixelSize: 8
+                                            font.weight: Font.Bold
+                                            font.letterSpacing: 0.7
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            width: parent.width
+                                            text: String(modelData.value || "—")
+                                            color: themeColors.text
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: analysisScroll.availableWidth
+                            radius: 11
+                            color: themeColors.panel2
+                            border.color: themeColors.border
+                            implicitHeight: descriptionColumn.implicitHeight + 24
+                            ColumnLayout {
+                                id: descriptionColumn
+                                anchors.fill: parent
+                                anchors.margins: 12
+                                spacing: 7
+                                Text { text: "DESCRIPTION"; color: themeColors.lime; font.pixelSize: 9; font.weight: Font.Bold; font.letterSpacing: 1.1 }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: window.analysisData.description || "No description was supplied by the source."
+                                    color: themeColors.muted
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                    maximumLineCount: 6
+                                    elide: Text.ElideRight
+                                }
+                                Text {
+                                    visible: (window.analysisData.tags || []).length > 0
+                                    Layout.fillWidth: true
+                                    text: "Tags  ·  " + (window.analysisData.tags || []).slice(0, 20).join("  ·  ")
+                                    color: themeColors.subtle
+                                    font.pixelSize: 9
+                                    wrapMode: Text.WordWrap
+                                    maximumLineCount: 2
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.minimumWidth: 0
+                            Layout.preferredWidth: analysisScroll.availableWidth
+                            radius: 11
+                            color: themeColors.panel2
+                            border.color: themeColors.border
+                            implicitHeight: formatsColumn.implicitHeight + 22
+                            ColumnLayout {
+                                id: formatsColumn
+                                anchors.fill: parent
+                                anchors.margins: 12
+                                spacing: 8
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text { text: "AVAILABLE FORMATS"; color: themeColors.lime; font.pixelSize: 9; font.weight: Font.Bold; font.letterSpacing: 1.1 }
+                                    Item { Layout.fillWidth: true }
+                                    Text { text: (window.analysisData.formats || []).length + " streams"; color: themeColors.subtle; font.pixelSize: 9 }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text { text: "ID"; color: themeColors.subtle; font.pixelSize: 8; Layout.preferredWidth: 44 }
+                                    Text { text: "CONTAINER"; color: themeColors.subtle; font.pixelSize: 8; Layout.preferredWidth: 72 }
+                                    Text { text: "RESOLUTION"; color: themeColors.subtle; font.pixelSize: 8; Layout.preferredWidth: 105 }
+                                    Text { text: "FPS"; color: themeColors.subtle; font.pixelSize: 8; Layout.preferredWidth: 48 }
+                                    Text { text: "SIZE"; color: themeColors.subtle; font.pixelSize: 8; Layout.preferredWidth: 68 }
+                                    Text { text: "VIDEO / AUDIO"; color: themeColors.subtle; font.pixelSize: 8; Layout.fillWidth: true }
+                                }
+
+                                Repeater {
+                                    model: (window.analysisData.formats || []).slice(0, 16)
+                                    delegate: Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 29
+                                        radius: 5
+                                        color: index % 2 === 0 ? themeColors.panel3 : "transparent"
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: 7
+                                            anchors.rightMargin: 7
+                                            spacing: 6
+                                            Text { text: String(modelData.format_id || "—"); color: themeColors.text; font.pixelSize: 9; Layout.preferredWidth: 44 }
+                                            Text { text: String(modelData.ext || "—").toUpperCase(); color: themeColors.muted; font.pixelSize: 9; Layout.preferredWidth: 72 }
+                                            Text { text: String(modelData.resolution || "—"); color: themeColors.muted; font.pixelSize: 9; Layout.preferredWidth: 105 }
+                                            Text { text: modelData.fps ? String(modelData.fps) : "—"; color: themeColors.muted; font.pixelSize: 9; Layout.preferredWidth: 48 }
+                                            Text { text: window.displayMediaSize(modelData.filesize); color: themeColors.muted; font.pixelSize: 9; Layout.preferredWidth: 68 }
+                                            Text {
+                                                text: [modelData.vcodec, modelData.acodec].filter(function(v){ return v && v !== "none" }).join(" / ") || "—"
+                                                color: themeColors.subtle
+                                                font.pixelSize: 9
+                                                elide: Text.ElideRight
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: themeColors.border }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 18
+                Layout.rightMargin: 18
+                Layout.topMargin: 11
+                Layout.bottomMargin: 13
+                spacing: 8
+
+                Text {
+                    text: window.analysisData.webpage_url || window.analysisTargetUrl
+                    color: themeColors.subtle
+                    font.pixelSize: 9
+                    elide: Text.ElideMiddle
+                    Layout.fillWidth: true
+                }
+
+                Btn {
+                    visible: !window.analysisBusy && !window.analysisError.length && !!window.analysisData.webpage_url
+                    text: "Open source"
+                    icon: "external-link"
+                    implicitHeight: 32
+                    onClicked: Qt.openUrlExternally(window.analysisData.webpage_url)
+                }
+
+                Btn {
+                    text: window.analysisError.length ? "Done" : "Close"
+                    primary: true
+                    implicitHeight: 32
+                    onClicked: analysisDialog.close()
+                }
+            }
+        }
     }
+    Dialog {
+        id: logDialog
+        modal: true
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(980, window.width - 36)
+        height: Math.min(700, window.height - 36)
+        padding: 0
+        standardButtons: Dialog.NoButton
+        closePolicy: Popup.CloseOnEscape
+        background: Rectangle {
+            color: themeColors.panel
+            radius: 16
+            border.color: themeColors.border
+        }
+        contentItem: ColumnLayout {
+            spacing: 0
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 18
+                spacing: 10
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 3
+                    Text { text: "DIAGNOSTICS"; color: themeColors.lime; font.pixelSize: 9; font.weight: Font.Bold; font.letterSpacing: 1.3 }
+                    Text { text: "Application log"; color: themeColors.text; font.pixelSize: 19; font.weight: Font.Bold }
+                    Text { text: bridge.logPath(); color: themeColors.subtle; font.pixelSize: 9; font.family: "monospace"; elide: Text.ElideMiddle; Layout.fillWidth: true }
+                }
+                Btn { text: "Refresh"; icon: "refresh"; implicitHeight: 34; onClicked: applicationLogText = bridge.readLog() }
+                Btn { text: "Export"; icon: "download"; primary: true; implicitHeight: 34; onClicked: bridge.exportLog() }
+                Btn { text: "Close"; icon: "x"; implicitHeight: 34; onClicked: logDialog.close() }
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: themeColors.border }
+            ScrollView {
+                id: logScroll
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.margins: 14
+                clip: true
+                contentWidth: availableWidth
+                ScrollBar.vertical: ScrollBar { active: true }
+                TextArea {
+                    width: logScroll.availableWidth
+                    height: Math.max(logScroll.availableHeight, contentHeight + 24)
+                    text: window.applicationLogText
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: TextEdit.Wrap
+                    color: themeColors.text
+                    selectedTextColor: themeColors.bg
+                    selectionColor: themeColors.lime
+                    font.family: "Consolas"
+                    font.pixelSize: 10
+                    background: Rectangle { color: themeColors.bg; radius: 9; border.color: themeColors.border }
+                }
+            }
+            Rectangle { Layout.fillWidth: true; height: 1; color: themeColors.border }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 14
+                Text {
+                    text: "Recent log output · secrets and private URLs may appear in diagnostic messages."
+                    color: themeColors.subtle
+                    font.pixelSize: 9
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+                Btn { text: "Open log file"; icon: "external-link"; implicitHeight: 32; onClicked: bridge.openLogFile() }
+            }
+        }
+    }
+
     LyricsDialog {
         id: lyricsDialog
         songTitle: lyricsTitle || playerTitle

@@ -7,15 +7,16 @@ GUI thread.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer, Signal, Slot, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
-from .config import load_settings, save_settings
+from .config import LOG_BACKUP_COUNT, LOG_FILE, load_settings, save_settings
 from .engine import is_http_url, tool_status
 from .lyrics import find_lrc_sidecar, lyric_match_score, parse_lrc
 from .music import (
@@ -23,13 +24,15 @@ from .music import (
     SpotifyResolveWorker, PLAYLISTS_KEY, load_music_playlists, save_music_playlists,
     scan_audio_library,
 )
-from .presets import merged_presets
+from .presets import PRESETS, _valid_preset_name, merged_presets
+from .download_options import sanitize_download_options
 from .workers import AnalyzeWorker, FunctionWorker, MediaTaskWorker
 
 # Only the fields the QML queue/downloads view reads. The old queueJson() also
 # serialised every task's options dict and up to 80 log lines on each update.
 _QUEUE_FIELDS = ("id", "kind", "name", "status", "progress", "detail", "output", "outputs",
-                 "group_id", "group_name", "group_cover", "music_track")
+                 "group_id", "group_name", "group_cover", "music_track", "thumbnail",
+                 "uploader", "duration", "view_count", "upload_date")
 QUEUE_EMIT_INTERVAL_MS = 150
 
 
@@ -43,8 +46,10 @@ def _multimedia():
 
 class AppBridge(QObject):
     queueChanged = Signal()
+    logUpdated = Signal()
     statusChanged = Signal(str)
     analysisReady = Signal(str)
+    analysisFailed = Signal(str)
     presetsChanged = Signal(str)
     settingsChanged = Signal(str)
     searchResults = Signal(str)
@@ -65,6 +70,8 @@ class AppBridge(QObject):
         self.active_task_id = None
         self.active_worker = None
         self.analysis_worker = None
+        self._last_analysis_url = ""
+        self._last_analysis = {}
         self.search_worker = None
         self.spotify_worker = None
         self.lyrics_worker = None
@@ -281,7 +288,10 @@ class AppBridge(QObject):
             self._queue_timer.start()
 
     def _notify(self, message):
-        self.errorRaised.emit(str(message))
+        message = str(message)
+        logging.getLogger(__name__).info("UI notice: %s", message[:1200])
+        self.logUpdated.emit()
+        self.errorRaised.emit(message)
 
     def _new_task(self, kind, name, options=None, **fields):
         task = {
@@ -304,39 +314,126 @@ class AppBridge(QObject):
         if self.analysis_worker and self.analysis_worker.isRunning():
             self._notify("An analysis is already running.")
             return
+        self._last_analysis_url = ""
+        self._last_analysis = {}
         self.statusChanged.emit(json.dumps({"analysis": "Inspecting source…"}))
         self.analysis_worker = AnalyzeWorker(url, self, settings=self.settings)
-        self.analysis_worker.completed.connect(lambda data: self.analysisReady.emit(json.dumps(data)))
-        self.analysis_worker.failed.connect(self._notify)
+        self.analysis_worker.completed.connect(lambda data: self._analysis_ready(url, data))
+        self.analysis_worker.failed.connect(self.analysisFailed.emit)
         self.analysis_worker.finished.connect(self._cleanup_finished_worker)
         self.analysis_worker.start()
 
-    @Slot(str, str, str)
-    def enqueueDownload(self, url, preset_name, container="Original"):
-        url = str(url).strip()
+    def _analysis_ready(self, url, data):
+        # The legacy Widgets dialog uses thumbnail_data bytes. QML loads the
+        # thumbnail URL itself, so strip binary bytes before JSON serialization.
+        clean = {key: value for key, value in dict(data or {}).items() if key != "thumbnail_data"}
+        self._last_analysis_url = str(url)
+        self._last_analysis = clean
+        self.analysisReady.emit(json.dumps(clean, ensure_ascii=False))
+
+    def _enqueue_download(self, url: str, options: dict) -> bool:
+        url = str(url or "").strip()
         if not is_http_url(url):
             self._notify("Paste a valid http:// or https:// media URL with a hostname.")
-            return
-        options = dict(self.presets.get(preset_name) or self.presets.get("Balanced Quality and Size") or {})
-        container = str(container or "Original").strip().lower()
-        options["container"] = "original" if container == "original" else container
-        self._new_task("download", url, options, url=url)
+            return False
+        try:
+            clean_options = sanitize_download_options(options)
+        except ValueError as exc:
+            self._notify(f"Invalid downloader options: {exc}")
+            return False
+        media = self._last_analysis if self._last_analysis_url == url else {}
+        self._new_task(
+            "download", media.get("title") or url, clean_options, url=url,
+            thumbnail=media.get("thumbnail") or "",
+            uploader=media.get("uploader") or media.get("channel") or "",
+            duration=media.get("duration"),
+            view_count=media.get("view_count"),
+            upload_date=media.get("upload_date") or "",
+        )
+        return True
 
-    @Slot(str)
+    @Slot(str, str, str, result=bool)
+    def enqueueDownload(self, url, preset_name, container="Original"):
+        """Compatibility entry point for older QML builds and external callers."""
+        options = dict(
+            self.presets.get(preset_name)
+            or self.presets.get("Balanced Quality and Size")
+            or {}
+        )
+        selected_container = str(container or "Original").strip().lower()
+        options["container"] = "original" if selected_container == "original" else selected_container
+        return self._enqueue_download(url, options)
+
+    @Slot(str, str, result=bool)
+    def enqueueDownloadWithOptions(self, url, options_json):
+        """Queue a download with the complete modern advanced-control payload."""
+        try:
+            options = json.loads(str(options_json or "{}"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            self._notify("Could not read the advanced downloader options.")
+            return False
+        return self._enqueue_download(url, options)
+
+    @Slot(str, result=str)
+    def saveCustomPreset(self, options_json):
+        """Save the current advanced-control values as a validated user preset."""
+        try:
+            options = sanitize_download_options(json.loads(str(options_json or "{}")))
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            self._notify(f"Cannot save this preset: {exc}")
+            return ""
+
+        name, accepted = QInputDialog.getText(
+            None, "Save custom preset", "Preset name (1–48 characters):"
+        )
+        if not accepted:
+            return ""
+        name = str(name).strip()
+        if not _valid_preset_name(name):
+            self._notify(
+                "Preset names must be 1–48 characters, start with a letter or number, "
+                "and end with a letter, number, or closing parenthesis."
+            )
+            return ""
+        if name in PRESETS:
+            self._notify("Built-in presets are protected. Choose a different name.")
+            return ""
+
+        custom = self.settings.setdefault("custom_presets", {})
+        if name in custom:
+            answer = QMessageBox.question(
+                None,
+                "Replace custom preset?",
+                f"A custom preset named “{name}” already exists. Replace it?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return ""
+
+        custom[name] = options
+        self._persist()
+        self.presets = merged_presets(custom)
+        self.presetsChanged.emit(json.dumps(self.presets, ensure_ascii=False))
+        self._notify(f"Saved custom preset: {name}")
+        return name
+
+    @Slot(str, result=bool)
     def enqueueSpotify(self, url):
         url = str(url).strip()
         if self.spotify_worker and self.spotify_worker.isRunning():
             self._notify("Spotify link resolution is already running.")
-            return
+            return False
         if not url:
             self._notify("Paste a Spotify track, album, or playlist URL.")
-            return
+            return False
         self.statusChanged.emit(json.dumps({"spotify": "Resolving public Spotify metadata…"}))
         self.spotify_worker = SpotifyResolveWorker(url, self)
         self.spotify_worker.completed.connect(self._spotify_resolved)
         self.spotify_worker.failed.connect(self._notify)
         self.spotify_worker.finished.connect(self._cleanup_finished_worker)
         self.spotify_worker.start()
+        return True
 
     def _spotify_resolved(self, collection):
         tracks = collection.get("tracks") or []
@@ -671,6 +768,27 @@ class AppBridge(QObject):
                    "preserve_metadata": True}
         self._new_task("convert", Path(source).name, options, source=source)
 
+    @Slot(str, str, result=bool)
+    def enqueueConversionWithAdvancedOptions(self, source, options_json):
+        """Queue a local conversion using the same complete encoder panel as downloads."""
+        source_path = Path(str(source or "")).expanduser()
+        if not source_path.is_file():
+            self._notify("Choose an existing local media file.")
+            return False
+        try:
+            raw_options = json.loads(str(options_json or "{}"))
+            options = sanitize_download_options(raw_options)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            self._notify(f"Invalid conversion options: {exc}")
+            return False
+        self._new_task(
+            "convert",
+            source_path.name,
+            options,
+            source=str(source_path),
+        )
+        return True
+
     @Slot(str)
     def cancelTask(self, task_id):
         task = self._find_task(task_id)
@@ -755,10 +873,14 @@ class AppBridge(QObject):
 
     def _on_log(self, task_id, message):
         task = self._find_task(task_id)
+        message = str(message)
         if task:
             logs = task.setdefault("logs", [])
-            logs.append(str(message))
+            logs.append(message)
             task["logs"] = logs[-80:]
+            # Keep the global log useful even after a task card is removed.
+            logging.getLogger("ums.tasks").info("[%s] %s", task_id, message)
+            self.logUpdated.emit()
 
     def _on_completed(self, task_id, status, outputs, error):
         task = self._find_task(task_id)
@@ -1055,6 +1177,71 @@ class AppBridge(QObject):
         self.playlists.pop(str(name), None)
         save_music_playlists(self.playlists)
         self.playlistsChanged.emit(json.dumps(self.playlists))
+
+    @Slot(result=str)
+    def logPath(self):
+        """Return the path of the rotating application log."""
+        return str(LOG_FILE)
+
+    def _read_log_text(self, max_chars=8 * 1024 * 1024):
+        # Include rotated files oldest-to-newest. The viewer uses a smaller cap
+        # than export so opening the dialog stays responsive on slower machines.
+        paths = [
+            LOG_FILE.with_name(LOG_FILE.name + f".{index}")
+            for index in range(LOG_BACKUP_COUNT, 0, -1)
+        ] + [LOG_FILE]
+        chunks = []
+        for path in paths:
+            try:
+                if path.is_file():
+                    chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+            except OSError as exc:
+                logging.getLogger(__name__).warning("Could not read log %s: %s", path, exc)
+        output = "\n".join(part.rstrip() for part in chunks if part.strip())
+        if not output:
+            return "No application log has been written yet."
+        if len(output) > max_chars:
+            output = "[Earlier log output omitted to keep this view bounded.]\n" + output[-max_chars:]
+        return output
+
+    @Slot(result=str)
+    def readLog(self):
+        """Return recent application and task diagnostics for the in-app viewer."""
+        return self._read_log_text(max_chars=250_000)
+
+    @Slot()
+    def openLogFile(self):
+        try:
+            LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LOG_FILE.touch(exist_ok=True)
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOG_FILE))):
+                self._notify("Could not open the application log with the default text editor.")
+        except OSError as exc:
+            logging.getLogger(__name__).exception("Could not open the application log")
+            self._notify(f"Could not open application log: {exc}")
+
+    @Slot()
+    def exportLog(self):
+        suggested = Path.home() / "Downloads" / "UMS-application-log.txt"
+        destination, _ = QFileDialog.getSaveFileName(
+            None,
+            "Export application log",
+            str(suggested),
+            "Text files (*.txt);;Log files (*.log);;All files (*)",
+        )
+        if not destination:
+            return
+        try:
+            Path(destination).expanduser().write_text(
+                self._read_log_text(max_chars=8 * 1024 * 1024),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logging.getLogger(__name__).exception("Could not export the application log")
+            self._notify(f"Could not export application log: {exc}")
+            return
+        logging.getLogger(__name__).info("Application log exported")
+        self._notify(f"Application log exported to {destination}")
 
     @Slot(str)
     def openCatalogUrl(self, url):

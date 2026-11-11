@@ -6,11 +6,12 @@ import uuid
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize, QUrl, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QAction, QFont, QDesktopServices
+from PySide6.QtGui import QAction, QFont, QDesktopServices, QPixmap
 from PySide6.QtWidgets import QGraphicsOpacityEffect
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QInputDialog,
+    QDialog, QDialogButtonBox,
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QTableWidget, QTabWidget, QListWidgetItem, QSlider,
@@ -18,46 +19,209 @@ from PySide6.QtWidgets import (
 )
 
 from .config import DEFAULT_OUTPUT, load_settings, save_settings
-from .engine import tool_status
-from .presets import merged_presets
-from .workers import AnalyzeWorker, MediaTaskWorker
+from .engine import is_http_url, tool_status
+from .presets import PRESETS, _valid_preset_name, merged_presets
+from .workers import AnalyzeWorker, FunctionWorker, MediaTaskWorker
 from .music import CatalogSearchWorker, LyricsSearchWorker, SpotifyResolveWorker, load_music_playlists, save_music_playlists, scan_audio_library
 
 
 APP_STYLE = """
-QMainWindow, QWidget { background: #0b0d0a; color: #e9ece4; font-family: 'Segoe UI', 'Inter', sans-serif; font-size: 10pt; }
-QWidget#Sidebar { background: #0a0c09; border-right: 1px solid #20231c; }
-QLabel#Brand { font-size: 16pt; font-weight: 700; color: #f3f6fb; padding: 14px 10px; }
-QLabel#Eyebrow { color: #a3ab98; font-size: 8pt; font-weight: 700; letter-spacing: 1px; }
-QLabel#PageTitle { font-size: 21pt; font-weight: 700; color: #f4f7fb; }
-QLabel#Muted { color: #8b9281; }
-QLabel#CardTitle { font-size: 11pt; font-weight: 700; color: #e9ece4; }
-QFrame#Card, QGroupBox { background: #121510; border: 1px solid #2b3025; border-radius: 12px; }
-QGroupBox { margin-top: 14px; padding: 14px 12px 12px 12px; font-weight: 650; }
-QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0 6px; color: #dbe4f1; }
-QPushButton { background: #171a14; border: 1px solid #2b3025; border-radius: 9px; padding: 9px 14px; color: #dce1d4; font-weight: 600; }
-QPushButton:hover { background: #22271a; border-color: #56613a; }
-QPushButton:pressed { background: #0b0d0a; }
-QPushButton:disabled { background: #151711; border-color: #25291f; color: #62685a; }
-QPushButton#Primary { background: #c8f24f; border: 1px solid #d8f97a; color: #171c05; }
-QPushButton#Primary:hover { background: #d8f97a; }
-QPushButton#Nav { background: transparent; border: 0; border-radius: 9px; text-align: left; padding: 11px 13px; color: #92998a; font-weight: 600; }
-QPushButton#Nav:hover { background: #171a14; color: #e9ece4; }
-QPushButton#Nav:checked { background: #1d2413; color: #d8f97a; border-left: 3px solid #c8f24f; }
-QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QListWidget, QTableWidget {
- background: #0b0d0a; border: 1px solid #39412f; border-radius: 7px; padding: 8px; color: #e7edf6; selection-background-color: #39412f;
+QMainWindow, QWidget {
+    background: #11161e;
+    color: #e8edf4;
+    font-family: "Segoe UI", "Inter", sans-serif;
+    font-size: 10pt;
 }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus { border: 1px solid #c8f24f; }
-QComboBox::drop-down { border: 0; width: 24px; }
-QComboBox QAbstractItemView { background: #121510; color: #edf3fb; selection-background-color: #39412f; border: 1px solid #39412f; }
-QCheckBox { spacing: 8px; color: #dce4f0; }
-QCheckBox::indicator { width: 16px; height: 16px; }
-QProgressBar { background: #0b0d0a; border: 1px solid #39412f; border-radius: 6px; text-align: center; color: #edf3fb; height: 14px; }
-QProgressBar::chunk { background: #c8f24f; border-radius: 5px; }
-QHeaderView::section { background: #1a1e17; color: #aebbd0; border: 0; border-bottom: 1px solid #2b3025; padding: 9px; font-weight: 650; }
-QTableWidget { gridline-color: #2b3025; alternate-background-color: #121510; }
-QScrollArea { border: 0; }
-QToolTip { background: #1a1e17; color: #f2f6fd; border: 1px solid #39412f; padding: 5px; }
+QMenuBar {
+    background: #171e28;
+    color: #dce4ee;
+    border-bottom: 1px solid #2a3544;
+    padding: 5px 8px;
+}
+QMenuBar::item { padding: 6px 10px; border-radius: 6px; }
+QMenuBar::item:selected { background: #263243; }
+QMenu {
+    background: #1a222d;
+    color: #e8edf4;
+    border: 1px solid #344153;
+    padding: 5px;
+}
+QMenu::item { padding: 7px 26px 7px 10px; border-radius: 5px; }
+QMenu::item:selected { background: #2b394b; }
+QWidget#Sidebar {
+    background: #171e28;
+    border-right: 1px solid #2a3544;
+}
+QLabel#Brand {
+    font-size: 16pt;
+    font-weight: 750;
+    color: #f5f7fb;
+    padding: 14px 10px;
+}
+QLabel#Eyebrow {
+    color: #8e9bab;
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+QLabel#PageTitle {
+    font-size: 22pt;
+    font-weight: 750;
+    color: #f5f7fb;
+}
+QLabel#Muted { color: #9aa7b7; }
+QLabel#CardTitle {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #eff3f8;
+}
+QFrame#Card, QGroupBox {
+    background: #19212c;
+    border: 1px solid #2d3949;
+    border-radius: 13px;
+}
+QGroupBox {
+    margin-top: 14px;
+    padding: 15px 13px 12px 13px;
+    font-weight: 650;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 14px;
+    padding: 0 6px;
+    color: #e1e8f1;
+}
+QPushButton {
+    background: #222c39;
+    border: 1px solid #354457;
+    border-radius: 9px;
+    padding: 9px 14px;
+    min-height: 20px;
+    color: #e0e7f0;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: #2b394a;
+    border-color: #61748c;
+}
+QPushButton:pressed { background: #18212c; }
+QPushButton:disabled {
+    background: #1b232d;
+    border-color: #293443;
+    color: #697789;
+}
+QPushButton#Primary {
+    background: #a3e635;
+    border: 1px solid #b8f45a;
+    color: #1c290b;
+    font-weight: 750;
+}
+QPushButton#Primary:hover { background: #b5f04e; }
+QPushButton#Nav {
+    background: transparent;
+    border: 0;
+    border-left: 3px solid transparent;
+    border-radius: 8px;
+    text-align: left;
+    padding: 11px 12px;
+    color: #a0acbb;
+    font-weight: 650;
+}
+QPushButton#Nav:hover {
+    background: #202a37;
+    color: #f0f4f8;
+}
+QPushButton#Nav:checked {
+    background: #26351d;
+    color: #c7f36d;
+    border-left: 3px solid #a3e635;
+}
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QListWidget, QTableWidget {
+    background: #111821;
+    border: 1px solid #354356;
+    border-radius: 8px;
+    padding: 8px;
+    color: #e7edf5;
+    selection-background-color: #40546c;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {
+    border: 1px solid #a3e635;
+}
+QComboBox::drop-down { border: 0; width: 26px; }
+QComboBox QAbstractItemView {
+    background: #1a222d;
+    color: #edf3fa;
+    selection-background-color: #35485e;
+    border: 1px solid #3a4a5e;
+    outline: 0;
+}
+QCheckBox { spacing: 8px; color: #dce4ed; }
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #526176;
+    border-radius: 4px;
+    background: #111821;
+}
+QCheckBox::indicator:checked {
+    background: #a3e635;
+    border-color: #a3e635;
+}
+QProgressBar {
+    background: #111821;
+    border: 1px solid #354356;
+    border-radius: 7px;
+    text-align: center;
+    color: #edf3fa;
+    height: 16px;
+}
+QProgressBar::chunk { background: #a3e635; border-radius: 6px; }
+QHeaderView::section {
+    background: #202a37;
+    color: #b9c5d4;
+    border: 0;
+    border-bottom: 1px solid #354356;
+    padding: 9px;
+    font-weight: 700;
+}
+QTableWidget {
+    gridline-color: #2d3949;
+    alternate-background-color: #171f29;
+}
+QTableWidget::item { padding: 5px; }
+QTableWidget::item:selected { background: #34495f; color: #ffffff; }
+QScrollArea { border: 0; background: transparent; }
+QScrollBar:vertical {
+    background: #151d27;
+    width: 11px;
+    margin: 2px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical {
+    background: #46566a;
+    min-height: 28px;
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical:hover { background: #60758f; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal {
+    background: #151d27;
+    height: 11px;
+    margin: 2px;
+    border-radius: 5px;
+}
+QScrollBar::handle:horizontal {
+    background: #46566a;
+    min-width: 28px;
+    border-radius: 5px;
+}
+QSplitter::handle { background: #2a3544; }
+QToolTip {
+    background: #202a37;
+    color: #f2f6fb;
+    border: 1px solid #46566a;
+    padding: 6px;
+}
 """
 
 
@@ -245,6 +409,10 @@ class AdvancedSettingsWidget(QWidget):
             index = combo.findText(value)
             if index >= 0:
                 combo.setCurrentIndex(index)
+            else:
+                default_index = combo.findText(combo_defaults.get(key, ""))
+                if default_index >= 0:
+                    combo.setCurrentIndex(default_index)
         self.fps.setCurrentText(str(options.get("fps", "Source")))
         self.video_bitrate.setText(str(options.get("video_bitrate", "")))
         self.audio_bitrate.setText(str(options.get("audio_bitrate", "")))
@@ -272,11 +440,344 @@ class AdvancedSettingsWidget(QWidget):
             widget.setChecked(bool(options.get(key, checkbox_defaults[key])))
 
 
+class AnalysisDialog(QDialog):
+    """Compact, readable media-inspection window with thumbnail and source details."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("AnalysisDialog")
+        self.setWindowTitle("Analyze URL")
+        self.setModal(False)
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+        )
+        self.resize(980, 760)
+        self.setMinimumSize(740, 560)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(22, 20, 22, 18)
+        root.setSpacing(12)
+
+        header = QHBoxLayout()
+        intro = QVBoxLayout()
+        eyebrow = QLabel("SOURCE INSPECTION")
+        eyebrow.setObjectName("Eyebrow")
+        self.heading = QLabel("Analyze URL")
+        self.heading.setStyleSheet("font-size: 19pt; font-weight: 750; color: #f5f7fb;")
+        self.status = QLabel("Waiting for the source…")
+        self.status.setObjectName("Muted")
+        intro.addWidget(eyebrow)
+        intro.addWidget(self.heading)
+        intro.addWidget(self.status)
+        header.addLayout(intro, 1)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.progress.setFixedWidth(150)
+        header.addWidget(self.progress, 0, Qt.AlignVCenter)
+        root.addLayout(header)
+
+        self.loading_panel = QFrame()
+        self.loading_panel.setObjectName("Card")
+        loading_layout = QVBoxLayout(self.loading_panel)
+        loading_layout.setContentsMargins(22, 22, 22, 22)
+        loading_layout.setSpacing(10)
+        self.loading_title = QLabel("Fetching media information")
+        self.loading_title.setStyleSheet("font-size: 14pt; font-weight: 700;")
+        self.loading_detail = QLabel("yt-dlp is checking the page, available formats, and preview image.")
+        self.loading_detail.setObjectName("Muted")
+        self.loading_detail.setWordWrap(True)
+        loading_layout.addStretch(1)
+        loading_layout.addWidget(self.loading_title, 0, Qt.AlignHCenter)
+        loading_layout.addWidget(self.loading_detail, 0, Qt.AlignHCenter)
+        loading_layout.addStretch(1)
+        root.addWidget(self.loading_panel, 1)
+
+        self.error_panel = QFrame()
+        self.error_panel.setObjectName("Card")
+        error_layout = QVBoxLayout(self.error_panel)
+        error_layout.setContentsMargins(18, 18, 18, 18)
+        self.error_label = QLabel()
+        self.error_label.setWordWrap(True)
+        self.error_label.setStyleSheet("color: #ff9e9e;")
+        error_layout.addWidget(self.error_label)
+        self.error_panel.hide()
+        root.addWidget(self.error_panel, 1)
+
+        self.result_panel = QWidget()
+        result_layout = QVBoxLayout(self.result_panel)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.setSpacing(12)
+
+        hero = QFrame()
+        hero.setObjectName("Card")
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(14, 14, 14, 14)
+        hero_layout.setSpacing(18)
+
+        self.thumbnail = QLabel("Thumbnail will appear here")
+        self.thumbnail.setAlignment(Qt.AlignCenter)
+        self.thumbnail.setFixedSize(300, 169)
+        self.thumbnail.setWordWrap(True)
+        self.thumbnail.setStyleSheet(
+            "background: #101720; border: 1px solid #354356; "
+            "border-radius: 9px; color: #8e9bab; padding: 8px;"
+        )
+        hero_layout.addWidget(self.thumbnail, 0, Qt.AlignTop)
+
+        info_column = QVBoxLayout()
+        info_column.setSpacing(8)
+        self.title_label = QLabel("Untitled media")
+        self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet("font-size: 15pt; font-weight: 750; color: #f5f7fb;")
+        info_column.addWidget(self.title_label)
+
+        metadata = QGridLayout()
+        metadata.setHorizontalSpacing(14)
+        metadata.setVerticalSpacing(8)
+        self.metadata_values = {}
+        labels = [
+            ("Uploader", "uploader"), ("Duration", "duration"), ("Resolution", "resolution"),
+            ("Frame rate", "fps"), ("Views", "views"), ("Likes", "likes"),
+            ("Published", "published"), ("File size", "filesize"), ("Source", "source"),
+            ("Video codec", "vcodec"), ("Audio codec", "acodec"),
+            ("Available formats", "formats"), ("Subtitles", "subtitles"), ("Media ID", "media_id"),
+        ]
+        for index, (label, key) in enumerate(labels):
+            row, col = divmod(index, 3)
+            cell = QVBoxLayout()
+            cell.setSpacing(2)
+            key_label = QLabel(label.upper())
+            key_label.setObjectName("Eyebrow")
+            value_label = QLabel("—")
+            value_label.setWordWrap(True)
+            value_label.setStyleSheet("color: #e7edf5; font-weight: 650;")
+            cell.addWidget(key_label)
+            cell.addWidget(value_label)
+            metadata.addLayout(cell, row, col)
+            self.metadata_values[key] = value_label
+        info_column.addLayout(metadata)
+        info_column.addStretch(1)
+        hero_layout.addLayout(info_column, 1)
+        result_layout.addWidget(hero)
+
+        description_card = QFrame()
+        description_card.setObjectName("Card")
+        description_layout = QVBoxLayout(description_card)
+        description_layout.setContentsMargins(14, 12, 14, 12)
+        description_layout.setSpacing(6)
+        description_title = QLabel("DESCRIPTION")
+        description_title.setObjectName("Eyebrow")
+        description_layout.addWidget(description_title)
+        self.description = QPlainTextEdit()
+        self.description.setReadOnly(True)
+        self.description.setMaximumHeight(100)
+        self.description.setPlaceholderText("No description provided by the source.")
+        description_layout.addWidget(self.description)
+        self.tags_label = QLabel()
+        self.tags_label.setObjectName("Muted")
+        self.tags_label.setWordWrap(True)
+        description_layout.addWidget(self.tags_label)
+        result_layout.addWidget(description_card)
+
+        formats_card = QFrame()
+        formats_card.setObjectName("Card")
+        formats_layout = QVBoxLayout(formats_card)
+        formats_layout.setContentsMargins(14, 12, 14, 12)
+        formats_layout.setSpacing(6)
+        formats_title = QLabel("AVAILABLE FORMATS")
+        formats_title.setObjectName("Eyebrow")
+        formats_layout.addWidget(formats_title)
+        self.formats_table = QTableWidget(0, 6)
+        self.formats_table.setHorizontalHeaderLabels(
+            ["ID", "Container", "Resolution", "FPS", "File size", "Video / audio"]
+        )
+        self.formats_table.verticalHeader().setVisible(False)
+        self.formats_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.formats_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.formats_table.setAlternatingRowColors(True)
+        self.formats_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.formats_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.formats_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.formats_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.formats_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.formats_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        self.formats_table.setMinimumHeight(140)
+        self.formats_table.setMaximumHeight(230)
+        formats_layout.addWidget(self.formats_table)
+        result_layout.addWidget(formats_card)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(self.result_panel)
+        self.result_panel.hide()
+        root.addWidget(scroll, 1)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        close_button.setMinimumWidth(100)
+        actions.addWidget(close_button)
+        root.addLayout(actions)
+
+    @staticmethod
+    def _number(value):
+        try:
+            return f"{int(value):,}"
+        except (TypeError, ValueError, OverflowError):
+            return "—"
+
+    @staticmethod
+    def _duration(value):
+        try:
+            seconds = max(0, int(float(value)))
+        except (TypeError, ValueError, OverflowError):
+            return "Live / unknown"
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:d}:{seconds:02d}"
+
+    @staticmethod
+    def _date(value):
+        value = str(value or "")
+        if len(value) == 8 and value.isdigit():
+            return f"{value[0:4]}-{value[4:6]}-{value[6:8]}"
+        return value or "—"
+
+    @staticmethod
+    def _size(value):
+        try:
+            size = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return "—"
+        if size <= 0:
+            return "—"
+        units = ("B", "KB", "MB", "GB", "TB")
+        index = 0
+        while size >= 1024 and index < len(units) - 1:
+            size /= 1024
+            index += 1
+        return f"{size:.1f} {units[index]}" if index else f"{int(size)} B"
+
+    @staticmethod
+    def _codec(value):
+        value = str(value or "").strip()
+        return "—" if not value or value.lower() == "none" else value.upper()
+
+    def show_loading(self, url):
+        self.heading.setText("Analyzing media")
+        self.status.setText("Connecting to the source and reading its metadata…")
+        self.loading_detail.setText(url)
+        self.progress.show()
+        self.loading_panel.show()
+        self.error_panel.hide()
+        self.result_panel.hide()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def show_error(self, message):
+        self.heading.setText("Analysis could not be completed")
+        self.status.setText("The source did not return usable media information.")
+        self.progress.hide()
+        self.loading_panel.hide()
+        self.result_panel.hide()
+        self.error_label.setText(str(message))
+        self.error_panel.show()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def show_result(self, info):
+        self.heading.setText("Media information")
+        self.status.setText(
+            f"{info.get('extractor') or 'Media source'} · "
+            f"{len(info.get('formats') or [])} formats found"
+        )
+        self.progress.hide()
+        self.loading_panel.hide()
+        self.error_panel.hide()
+
+        self.title_label.setText(str(info.get("title") or "Untitled media"))
+        values = {
+            "uploader": info.get("uploader") or info.get("channel") or "—",
+            "duration": self._duration(info.get("duration")),
+            "resolution": info.get("resolution") or "—",
+            "fps": (f"{float(info['fps']):g} FPS" if info.get("fps") else "—"),
+            "views": self._number(info.get("view_count")),
+            "likes": self._number(info.get("like_count")),
+            "published": self._date(info.get("upload_date") or info.get("release_date")),
+            "filesize": self._size(info.get("filesize")),
+            "source": info.get("extractor") or "—",
+            "vcodec": self._codec(info.get("vcodec")),
+            "acodec": self._codec(info.get("acodec")),
+            "formats": self._number(len(info.get("formats") or [])),
+            "subtitles": self._number(
+                len(info.get("subtitles") or []) + len(info.get("automatic_captions") or [])
+            ),
+            "media_id": info.get("id") or "—",
+        }
+        for key, label in self.metadata_values.items():
+            label.setText(str(values.get(key, "—")))
+
+        self.description.setPlainText(str(info.get("description") or "")[:12000])
+        tags = [str(tag) for tag in (info.get("tags") or [])[:12] if tag]
+        self.tags_label.setText("Tags: " + ", ".join(tags) if tags else "")
+
+        pixmap = QPixmap()
+        image_data = info.get("thumbnail_data")
+        if image_data and pixmap.loadFromData(image_data):
+            self.thumbnail.setPixmap(
+                pixmap.scaled(
+                    self.thumbnail.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+            )
+            self.thumbnail.setText("")
+        else:
+            self.thumbnail.setPixmap(QPixmap())
+            self.thumbnail.setText("Preview image unavailable")
+
+        formats = info.get("formats") or []
+        self.formats_table.setRowCount(0)
+        for source_format in formats[:14]:
+            row = self.formats_table.rowCount()
+            self.formats_table.insertRow(row)
+            codecs = " / ".join(
+                str(value) for value in (
+                    source_format.get("vcodec"),
+                    source_format.get("acodec"),
+                ) if value and value != "none"
+            ) or "—"
+            values = [
+                source_format.get("format_id", "—"),
+                source_format.get("ext", "—"),
+                source_format.get("resolution", "—"),
+                source_format.get("fps") or "—",
+                self._size(source_format.get("filesize")),
+                codecs,
+            ]
+            for col, value in enumerate(values):
+                self.formats_table.setItem(row, col, QTableWidgetItem(str(value)))
+        self.result_panel.show()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+
 class DownloadPage(QWidget):
     def __init__(self, main):
         super().__init__()
         self.main = main
         self.analysis_worker = None
+        self.analysis_dialog = AnalysisDialog(self)
+        self.latest_analysis = None
+        self.latest_analysis_url = ""
+        self.analyzing_url = ""
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(18)
@@ -287,7 +788,7 @@ class DownloadPage(QWidget):
         self.url = QPlainTextEdit()
         self.url.setPlaceholderText("Paste a media URL… (multiple URLs: one per line)")
         self.url.setFixedHeight(76)
-        self.analyze_btn = QPushButton("Analyze")
+        self.analyze_btn = QPushButton("Analyze URL")
         self.analyze_btn.setMinimumHeight(42)
         self.analyze_btn.clicked.connect(self.analyze)
         row.addWidget(self.url, 1)
@@ -295,6 +796,7 @@ class DownloadPage(QWidget):
         top_l.addLayout(row)
         self.analysis_label = QLabel("No media analyzed yet. You can also add a URL directly to the queue.")
         self.analysis_label.setObjectName("Muted")
+        self.analysis_label.setTextFormat(Qt.PlainText)
         self.analysis_label.setWordWrap(True)
         top_l.addWidget(self.analysis_label)
         root.addWidget(top)
@@ -314,7 +816,7 @@ class DownloadPage(QWidget):
         self.preset.addItems(list(self.main.presets.keys()))
         self.preset.currentTextChanged.connect(self.apply_preset)
         self.save_preset_btn = QPushButton("Save as preset")
-        self.save_preset_btn.clicked.connect(lambda: self.save_custom_preset(self.advanced.options(), self.output_format.currentText(), self.quality.currentData()))
+        self.save_preset_btn.clicked.connect(lambda: self.save_custom_preset(self.advanced_widget.options(), self.output_format.currentText(), self.quality.currentData()))
         self.advanced_toggle = QCheckBox("Show advanced controls")
         self._grid_field(grid, 0, 0, "Source quality", self.quality)
         self._grid_field(grid, 0, 1, "Output format", self.output_format)
@@ -359,21 +861,31 @@ class DownloadPage(QWidget):
         if not url:
             QMessageBox.information(self, "URL required", "Paste a media URL first.")
             return
+        if not is_http_url(url):
+            QMessageBox.warning(self, "Invalid URL", "Enter a complete http:// or https:// URL.")
+            return
         self.analyze_btn.setEnabled(False)
+        self.analyzing_url = url
+        self.latest_analysis = None
+        self.latest_analysis_url = ""
         self.analysis_label.setText("Inspecting available formats…")
-        self.analysis_worker = AnalyzeWorker(url, self)
+        self.analysis_dialog.show_loading(url)
+        self.analysis_worker = AnalyzeWorker(url, self, self.main.settings)
         self.analysis_worker.completed.connect(self.analysis_done)
         self.analysis_worker.failed.connect(self.analysis_failed)
         self.analysis_worker.finished.connect(lambda: self.analyze_btn.setEnabled(True))
         self.analysis_worker.start()
 
     def analysis_done(self, info):
+        self.latest_analysis = dict(info)
+        self.latest_analysis_url = self.analyzing_url
+        self.analysis_dialog.show_result(info)
         title = info.get("title", "Media")
         duration = info.get("duration")
         duration_text = f" · {int(duration // 60)}:{int(duration % 60):02d}" if isinstance(duration, (int, float)) else ""
         self.analysis_label.setStyleSheet("")
         self.analysis_label.setText(
-            f"<b>{title}</b>{duration_text} · {info.get('uploader', '')} · "
+            f"{title}{duration_text} · {info.get('uploader', '')} · "
             f"{len(info.get('formats', []))} source formats · "
             f"{len(info.get('subtitles', []))} subtitle languages"
         )
@@ -398,11 +910,26 @@ class DownloadPage(QWidget):
             if f.get("vcodec") not in (None, "none") and f.get("acodec") in (None, "none"):
                 fmt = f"{fmt}+bestaudio/best"
             self.quality.addItem(label, fmt)
-        self.quality.setCurrentIndex(0)
+        # Analysis rebuilds the source-format menu. Re-apply the selected
+        # preset's selector so analyzing a URL cannot silently undo the profile.
+        selected_preset = self.main.presets.get(self.preset.currentText(), {})
+        preset_format = selected_preset.get("format") if isinstance(selected_preset, dict) else None
+        if preset_format:
+            match = self.quality.findData(preset_format)
+            if match < 0:
+                self.quality.addItem(
+                    f"{self.preset.currentText()} source selection",
+                    preset_format,
+                )
+                match = self.quality.count() - 1
+            self.quality.setCurrentIndex(match)
+        else:
+            self.quality.setCurrentIndex(0)
 
     def analysis_failed(self, message):
         self.analysis_label.setText(f"Analysis failed: {message}")
         self.analysis_label.setStyleSheet("color: #ff9e9e;")
+        self.analysis_dialog.show_error(message)
 
     def apply_preset(self, name):
         preset = self.main.presets.get(name)
@@ -424,17 +951,41 @@ class DownloadPage(QWidget):
         self.advanced_widget.apply_options(preset)
 
     def save_custom_preset(self, adv, output_format, source_format):
-        from PySide6.QtWidgets import QInputDialog
-        name, ok = QInputDialog.getText(self, "Save preset", "Preset name:")
-        if not ok or not name.strip():
+        name, ok = QInputDialog.getText(self, "Save preset", "Preset name (1–48 characters):")
+        if not ok:
             return
+        name = name.strip()
+        if not _valid_preset_name(name):
+            QMessageBox.warning(
+                self, "Invalid preset name",
+                "Use 1–48 characters. Start with a letter or number and avoid trailing punctuation.",
+            )
+            return
+        if name in PRESETS:
+            QMessageBox.warning(
+                self, "Built-in preset",
+                "Built-in presets are protected. Choose a different name for your custom profile.",
+            )
+            return
+        custom = self.main.settings.setdefault("custom_presets", {})
+        if name in custom:
+            answer = QMessageBox.question(
+                self, "Replace custom preset?",
+                f"A custom preset named “{name}” already exists. Replace it?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
         data = dict(adv)
-        data.update({"container": "original" if output_format == "Original" else output_format.lower(), "format": source_format})
-        self.main.settings.setdefault("custom_presets", {})[name.strip()] = data
+        data.update({
+            "container": "original" if output_format == "Original" else output_format.lower(),
+            "format": source_format or "bestvideo+bestaudio/best",
+        })
+        custom[name] = data
         self.main.save_settings()
         self.main.refresh_presets()
-        self.preset.setCurrentText(name.strip())
-        QMessageBox.information(self, "Preset saved", f"Saved “{name.strip()}”.")
+        self.preset.setCurrentText(name)
+        QMessageBox.information(self, "Preset saved", f"Saved “{name}”.")
 
     def choose_output(self):
         folder = QFileDialog.getExistingDirectory(self, "Choose output folder", self.main.settings["output_dir"])
@@ -446,11 +997,27 @@ class DownloadPage(QWidget):
         if not urls:
             QMessageBox.information(self, "URL required", "Paste one or more URLs first.")
             return
+        invalid_urls = [url for url in urls if not is_http_url(url)]
+        urls = [url for url in urls if is_http_url(url)]
+        if invalid_urls:
+            preview = "\n".join(invalid_urls[:3])
+            suffix = "\n…" if len(invalid_urls) > 3 else ""
+            QMessageBox.warning(
+                self, "Some URLs were skipped",
+                f"{len(invalid_urls)} invalid URL(s) were skipped. Use complete http:// or https:// links.\n\n{preview}{suffix}",
+            )
+        if not urls:
+            return
         options = self.advanced_widget.options()
         options["container"] = "original" if self.output_format.currentText() == "Original" else self.output_format.currentText().lower()
         options["format"] = self.quality.currentData() or "bestvideo+bestaudio/best"
         options["audio_only"] = str(options["format"]).startswith("bestaudio") or options["container"] in {"mp3", "m4a", "aac", "opus", "ogg", "flac", "wav"}
-        self.main.add_download_tasks(urls, options)
+        analysed = (
+            self.latest_analysis
+            if self.latest_analysis and urls[0] == self.latest_analysis_url
+            else None
+        )
+        self.main.add_download_tasks(urls, options, analyzed_info=analysed)
         self.main.navigate("Queue")
 
 
@@ -583,12 +1150,20 @@ class QueuePage(QWidget):
         log_frame = QFrame()
         log_frame.setObjectName("Card")
         log_layout = QVBoxLayout(log_frame)
+        log_header = QHBoxLayout()
         log_title = QLabel("Activity log")
         log_title.setObjectName("CardTitle")
+        log_header.addWidget(log_title, 1)
+        export_log_btn = QPushButton("Export activity log")
+        export_log_btn.clicked.connect(self.export_activity_log)
+        log_header.addWidget(export_log_btn)
+        open_app_log_btn = QPushButton("Open application log")
+        open_app_log_btn.clicked.connect(self.open_application_log)
+        log_header.addWidget(open_app_log_btn)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(1200)
-        log_layout.addWidget(log_title)
+        log_layout.addLayout(log_header)
         log_layout.addWidget(self.log_view)
         splitter.addWidget(log_frame)
         splitter.setSizes([440, 190])
@@ -643,6 +1218,28 @@ class QueuePage(QWidget):
 
     def append_log(self, task_id: str, message: str):
         self.log_view.appendPlainText(f"[{task_id[:8]}] {message}")
+
+    def export_activity_log(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export activity log",
+            str(Path.home() / "Downloads" / "UMS-activity-log.txt"),
+            "Text files (*.txt);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            Path(path).expanduser().write_text(self.log_view.toPlainText(), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(self, "Log export failed", str(exc))
+            return
+        QMessageBox.information(self, "Log exported", f"Activity log saved to:\n{path}")
+
+    def open_application_log(self):
+        from .config import LOG_FILE
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LOG_FILE.touch(exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOG_FILE)))
 
     def refresh(self, tasks: list, active_task_id=None):
         selected_id = self.selected_task() or active_task_id
@@ -1154,6 +1751,7 @@ class SettingsPage(QWidget):
     def __init__(self, main):
         super().__init__()
         self.main = main
+        self._tool_status_worker = None
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(18)
@@ -1225,17 +1823,38 @@ class SettingsPage(QWidget):
             edit.setText(path)
 
     def refresh_tool_status(self):
-        status = tool_status(self.ffmpeg.text().strip() or None, self.ffprobe.text().strip() or None)
-        y = status["yt_dlp"] or "Missing"
-        ff = status["ffmpeg_version"] or "Missing — install FFmpeg and add it to PATH"
-        fp = status["ffprobe"] or "Missing — output checks will be limited"
+        if self._tool_status_worker and self._tool_status_worker.isRunning():
+            self.tools_status.setText("A tool check is already running…")
+            return
+        ffmpeg = self.ffmpeg.text().strip() or None
+        ffprobe = self.ffprobe.text().strip() or None
+        self.tools_status.setText("Checking local media tools…")
+        self._tool_status_worker = FunctionWorker(
+            lambda: tool_status(ffmpeg, ffprobe),
+            self,
+        )
+        self._tool_status_worker.done.connect(self._render_tool_status)
+        self._tool_status_worker.failed.connect(self._tool_status_failed)
+        self._tool_status_worker.start()
+
+    def _render_tool_status(self, status):
+        y = status.get("yt_dlp") or "Missing"
+        ff = status.get("ffmpeg_version") or "Missing — install FFmpeg and add it to PATH"
+        fp = status.get("ffprobe") or "Missing — output checks will be limited"
         encoders = set(status.get("encoders", []))
         relevant = [
-            x for x in ["libx264", "h264_nvenc", "h264_qsv", "h264_amf", "libx265", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libsvtav1", "libaom-av1", "av1_nvenc", "libvpx-vp9", "libvpx", "libmp3lame", "libopus", "libvorbis", "flac", "aac"]
+            x for x in ["mpeg4", "libx264", "h264_nvenc", "h264_qsv", "h264_amf", "libx265", "hevc_nvenc", "hevc_qsv", "hevc_amf", "libsvtav1", "libaom-av1", "av1_nvenc", "libvpx-vp9", "libvpx", "libmp3lame", "libopus", "libvorbis", "flac", "aac"]
             if x in encoders
         ]
         encoder_text = ", ".join(relevant) if relevant else "Not detected / FFmpeg missing"
-        self.tools_status.setText(f"yt-dlp: {y}\nFFmpeg: {ff}\nFFprobe: {fp}\nMusic matching: yt-dlp (no Spotify API token)\nDetected common encoders: {encoder_text}")
+        self.tools_status.setText(
+            f"yt-dlp: {y}\nFFmpeg: {ff}\nFFprobe: {fp}\n"
+            f"Music matching: yt-dlp (no Spotify API token)\n"
+            f"Detected common encoders: {encoder_text}"
+        )
+
+    def _tool_status_failed(self, message):
+        self.tools_status.setText(f"Could not check local tools: {message}")
 
     def save(self):
         self.main.set_output_folder(self.output_dir.text().strip() or str(DEFAULT_OUTPUT))
@@ -1244,8 +1863,10 @@ class SettingsPage(QWidget):
         self.main.settings["max_retries"] = self.retries.value()
         self.main.settings["fragment_concurrency"] = self.fragments.value()
         self.main.save_settings()
-        self.main.refresh_global_status()
+        # Start tool discovery first so the sidebar can subscribe to its result
+        # instead of blocking the GUI with a second synchronous FFmpeg probe.
         self.refresh_tool_status()
+        self.main.refresh_global_status()
         QMessageBox.information(self, "Settings saved", "Your settings have been saved locally.")
 
 
@@ -1258,9 +1879,11 @@ class MainWindow(QMainWindow):
         self.active_task_id = None
         self.active_worker = None
         self._pending_completion = None
+        self._close_after_worker = False
+        self._global_status_waiting = False
         self.setWindowTitle("Universal Media Studio")
-        self.resize(1280, 850)
-        self.setMinimumSize(1000, 700)
+        self.resize(1180, 800)
+        self.setMinimumSize(900, 620)
         self.setStyleSheet(APP_STYLE)
 
         central = QWidget()
@@ -1269,7 +1892,7 @@ class MainWindow(QMainWindow):
         root.setSpacing(0)
         self.sidebar = QWidget()
         self.sidebar.setObjectName("Sidebar")
-        self.sidebar.setFixedWidth(218)
+        self.sidebar.setFixedWidth(204)
         side = QVBoxLayout(self.sidebar)
         side.setContentsMargins(15, 12, 15, 16)
         side.setSpacing(7)
@@ -1314,8 +1937,21 @@ class MainWindow(QMainWindow):
             "Queue": self.queue_page,
             "Settings": self.settings_page,
         }
+        page_scrolls = {}
         for page in dict.fromkeys(self.pages.values()):
-            self.stack.addWidget(page)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setAlignment(Qt.AlignTop)
+            scroll.setWidget(page)
+            self.stack.addWidget(scroll)
+            page_scrolls[id(page)] = scroll
+        self.pages = {
+            name: page_scrolls[id(page)]
+            for name, page in self.pages.items()
+        }
         root.addWidget(self.stack, 1)
         self.setCentralWidget(central)
 
@@ -1363,10 +1999,32 @@ class MainWindow(QMainWindow):
             combo.blockSignals(False)
 
     def refresh_global_status(self):
-        status = tool_status(self.settings.get("ffmpeg_path") or None, self.settings.get("ffprobe_path") or None)
-        y = "yt-dlp ready" if status["yt_dlp"] else "yt-dlp missing"
-        f = "FFmpeg ready" if status["ffmpeg"] else "FFmpeg missing"
+        worker = getattr(self.settings_page, "_tool_status_worker", None)
+        if worker and worker.isRunning():
+            if not self._global_status_waiting:
+                self._global_status_waiting = True
+                worker.done.connect(self._update_global_status)
+                worker.failed.connect(self._global_status_failed)
+            return
+        try:
+            status = tool_status(
+                self.settings.get("ffmpeg_path") or None,
+                self.settings.get("ffprobe_path") or None,
+            )
+        except Exception as exc:
+            self._global_status_failed(str(exc))
+            return
+        self._update_global_status(status)
+
+    def _update_global_status(self, status):
+        self._global_status_waiting = False
+        y = "yt-dlp ready" if status.get("yt_dlp") else "yt-dlp missing"
+        f = "FFmpeg ready" if status.get("ffmpeg") else "FFmpeg missing"
         self.global_status.setText(f"{y}\n{f}")
+
+    def _global_status_failed(self, message):
+        self._global_status_waiting = False
+        self.global_status.setText(f"Tool check unavailable\n{message}")
 
     def navigate(self, name):
         self.stack.setCurrentWidget(self.pages[name])
@@ -1375,11 +2033,19 @@ class MainWindow(QMainWindow):
         for key, btn in self.nav_buttons.items():
             btn.setChecked(key == name)
 
-    def add_download_tasks(self, urls: list[str], options: dict):
-        for url in urls:
+    def add_download_tasks(self, urls: list[str], options: dict, analyzed_info=None):
+        analyzed_info = analyzed_info if isinstance(analyzed_info, dict) else {}
+        for index, url in enumerate(urls):
+            media_info = analyzed_info if index == 0 else {}
             task_id = uuid.uuid4().hex[:12]
             task = {
-                "id": task_id, "kind": "download", "url": url, "name": url[:92],
+                "id": task_id, "kind": "download", "url": url,
+                "name": str(media_info.get("title") or url[:92]),
+                "thumbnail": str(media_info.get("thumbnail") or ""),
+                "uploader": str(media_info.get("uploader") or media_info.get("channel") or ""),
+                "duration": media_info.get("duration"),
+                "view_count": media_info.get("view_count"),
+                "upload_date": str(media_info.get("upload_date") or ""),
                 "options": dict(options), "output_dir": self.settings["output_dir"],
                 "status": "Queued", "progress": 0, "detail": "Waiting in queue", "output": "",
             }
@@ -1452,6 +2118,7 @@ class MainWindow(QMainWindow):
             self.queue_page.refresh(self.tasks, self.active_task_id)
 
     def on_log(self, task_id, message):
+        logging.getLogger("ums.tasks").info("[%s] %s", task_id, str(message))
         self.queue_page.append_log(task_id, message)
 
     def on_task_completed(self, task_id, status, outputs, error):
@@ -1477,6 +2144,9 @@ class MainWindow(QMainWindow):
         self.active_task_id = None
         self._pending_completion = None
         self.queue_page.refresh(self.tasks, self.active_task_id)
+        if self._close_after_worker:
+            self._maybe_close_after_background()
+            return
         self.process_next()
 
     def find_task(self, task_id):
@@ -1502,6 +2172,7 @@ class MainWindow(QMainWindow):
             task["progress"] = 0
             task["detail"] = "Queued for retry"
             task["output"] = ""
+            task.pop("outputs", None)
             self.queue_page.refresh(self.tasks, self.active_task_id)
             self.process_next()
 
@@ -1547,14 +2218,68 @@ class MainWindow(QMainWindow):
         QMessageBox.about(self, "About Universal Media Studio",
                           "Universal Media Studio 1.0.0\n\nA local-first yt-dlp and FFmpeg GUI for authorized media downloads and conversions.\n\nNo telemetry or remote processing is included. Website availability and output codecs depend on the source and your installed tool builds.")
 
+    def _running_background_workers(self):
+        """Return every live QThread owned by the legacy UI."""
+        candidates = [
+            self.active_worker,
+            getattr(self.download_page, "analysis_worker", None),
+            getattr(self.music_page, "search_worker", None),
+            getattr(self.music_page, "lyrics_worker", None),
+            getattr(self.music_page, "spotify_worker", None),
+            getattr(self.settings_page, "_tool_status_worker", None),
+        ]
+        running = []
+        seen = set()
+        for worker in candidates:
+            if worker is None or id(worker) in seen:
+                continue
+            seen.add(id(worker))
+            try:
+                if worker.isRunning():
+                    running.append(worker)
+            except RuntimeError:
+                # A completed Qt worker may already have been deleted.
+                continue
+        return running
+
+    def _maybe_close_after_background(self):
+        if not self._close_after_worker:
+            return
+        if not self._running_background_workers():
+            self._close_after_worker = False
+            self.close()
+
     def closeEvent(self, event):
-        if self.active_worker and self.active_worker.isRunning():
-            reply = QMessageBox.question(self, "Stop active task?", "A media task is still running. Cancel it and exit?", QMessageBox.Yes | QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                self.active_worker.cancel()
-                self.active_worker.wait(5000)
-                event.accept()
-            else:
+        # Do not destroy a QThread while it is running. Media work can be
+        # cancelled; short catalog/analysis/tool workers are allowed to finish.
+        if self._close_after_worker:
+            event.ignore()
+            return
+        running_workers = self._running_background_workers()
+        media_running = bool(self.active_worker and self.active_worker.isRunning())
+        if media_running:
+            reply = QMessageBox.question(
+                self, "Stop active task?",
+                "A media task is still running. Cancel it and exit?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
                 event.ignore()
+                return
+            self._close_after_worker = True
+            self.active_worker.cancel()
+        elif running_workers:
+            self._close_after_worker = True
+
+        if self._close_after_worker:
+            # Connect all currently running workers. The shared handler checks
+            # the full set, so whichever one finishes last closes the window.
+            for worker in running_workers:
+                try:
+                    worker.finished.connect(self._maybe_close_after_background)
+                except RuntimeError:
+                    continue
+            self._maybe_close_after_background()
+            event.ignore()
         else:
             event.accept()

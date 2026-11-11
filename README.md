@@ -33,8 +33,12 @@ A local-first desktop GUI for **yt-dlp + FFmpeg**. It is designed for people who
 
 ### Interface and queue
 - Dark, minimal sidebar dashboard with Downloader, Converter, Queue, and Settings pages.
-- Simple profile selection with expandable advanced controls.
-- Sequential queue for downloads and conversions, cancellation, failed-task retry, queued-task reordering, removal, logs, and task history for the current session.
+- A modern expandable advanced-control panel shared by Downloader and Converter, including source quality, output container, codecs, bitrate/rate control, FPS, resolution, encoder hardware/profile, pixel/color settings, subtitles, metadata, and thumbnail controls.
+- Live output summary and inline validation for malformed bitrates, codec profiles/levels, FPS, custom dimensions, and incompatible explicit encoder selections. WebM selections show codec/subtitle compatibility notes before queueing.
+- Bulk URL batches are capped at 100 entries. The queue reports accepted/skipped links and keeps rejected URLs in the URL editor so they can be corrected.
+- Custom presets can be saved from the modern panel and are validated before they are stored.
+- Sequential queue for downloads and conversions, cancellation, failed-task retry, queued-task reordering, removal, per-task activity logs, and task history for the current session.
+- Rotating application diagnostics at `~/.universal_media_studio/startup.log` (2 MiB per file, three backups), with View, Open, and Export controls in Settings. Exported logs may contain media URLs or local file paths; review before sharing.
 - Custom presets saved locally; malformed profile labels are filtered from the Download Profile menu.
 - Built-in profiles: Best Available Quality, Smallest File, Balanced Quality and Size, Mobile Compatible, Low-End Device, Social Media Share, Archive Quality, Audio Only, Lossless Audio, 3GP Legacy Mobile, MP4 Universal Compatibility, and Web Optimized.
 
@@ -83,8 +87,8 @@ python app.py
 
 1. Open **Downloader** and paste a URL. Click **Analyze** to inspect the formats yt-dlp can access.
 2. Select a source quality and output format. The output format `Original` preserves the downloaded file without a container conversion.
-3. Choose a preset or enable **Show advanced controls** to set codecs, FPS, resolution, rate control, CRF, bitrates, subtitles, and metadata handling.
-4. Add the task to the queue. Open **Queue** to view progress, logs, cancellation, and retries.
+3. Choose a preset or expand **Advanced controls** to configure source format, output container, codecs, encoders, bitrate/rate control, quality, FPS, resolution, subtitles, and metadata. Check the live output summary and resolve any inline validation warnings.
+4. Add the task to the queue. UMS reports how many links were accepted or skipped; rejected links stay in the URL editor. Open **Queue** to view progress, logs, cancellation, and retries.
 5. Open **Converter** to choose local files and enqueue one or more FFmpeg conversions.
 6. Configure output paths and tool executables in **Settings**.
 

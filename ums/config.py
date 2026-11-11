@@ -13,6 +13,9 @@ from typing import Any
 
 APP_DIR = Path.home() / ".universal_media_studio"
 CONFIG_FILE = APP_DIR / "settings.json"
+LOG_FILE = APP_DIR / "startup.log"
+LOG_MAX_BYTES = 2 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
 DEFAULT_OUTPUT = Path.home() / "Downloads" / "UniversalMediaStudio"
 
 DEFAULT_SETTINGS = {
@@ -44,6 +47,40 @@ _BROWSER_NAMES = {
     "none", "brave", "chrome", "chromium", "edge", "firefox", "opera",
     "safari", "vivaldi", "whale",
 }
+
+
+def configure_logging() -> Path | None:
+    """Install a small rotating UTF-8 application log and return its path."""
+    from logging.handlers import RotatingFileHandler
+
+    try:
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=LOG_BACKUP_COUNT,
+            encoding="utf-8",
+            delay=True,
+        )
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"
+        ))
+        root = logging.getLogger()
+        for existing in root.handlers[:]:
+            root.removeHandler(existing)
+            try:
+                existing.close()
+            except Exception:
+                pass
+        root.addHandler(handler)
+        root.setLevel(logging.INFO)
+        logging.captureWarnings(True)
+        _LOG.info("Application logging initialized: %s", LOG_FILE)
+        return LOG_FILE
+    except OSError:
+        logging.basicConfig(level=logging.INFO, force=True)
+        logging.exception("Could not initialize the application log file")
+        return None
 
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
