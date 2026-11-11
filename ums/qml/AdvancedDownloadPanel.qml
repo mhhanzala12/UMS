@@ -32,7 +32,7 @@ ColumnLayout {
             if ((mode === "CBR" || mode === "VBR") && !String(videoBitrate.text || "").trim())
                 return mode + " mode needs a video bitrate, for example 2500k."
             if (resolution.currentText === "Custom") {
-                var dimensions = /^(\\d{2,5})x(\\d{2,5})$/i.exec(String(customScale.text || "").trim())
+                var dimensions = /^(\d{2,5})x(\d{2,5})$/i.exec(String(customScale.text || "").trim())
                 if (!dimensions)
                     return "Custom resolution must use WIDTHxHEIGHT, for example 320x240."
                 var width = Number(dimensions[1]), height = Number(dimensions[2])
@@ -59,7 +59,7 @@ ColumnLayout {
         }
         if (root.canSetAudioBitrate()) {
             var audioRate = String(audioBitrate.text || "").trim()
-            if (audioRate && !/^\\d+(?:\\.\\d+)?\\s*[kKmMgG]?$/.test(audioRate))
+            if (audioRate && !/^\d+(?:\.\d+)?\s*[kKmMgG]?$/.test(audioRate))
                 return "Audio bitrate must look like 192k or 1M."
         }
         return ""
