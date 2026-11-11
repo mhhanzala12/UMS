@@ -44,6 +44,22 @@ class ModernAdvancedDownloaderTests(unittest.TestCase):
         self.assertIn("bridge.enqueueDownloadWithOptions(urls[i], optionsJson)", self.main)
         self.assertNotIn("classic advanced Downloader window", self.main)
 
+    def test_panel_provides_live_output_summary_and_validation(self):
+        self.assertIn("readonly property string outputSummary", self.panel)
+        self.assertIn("readonly property string validationMessage", self.panel)
+        self.assertIn("readonly property string compatibilityNotice", self.panel)
+        self.assertIn("root.validationMessage.length === 0", self.panel)
+        self.assertIn('"CHECK YOUR SETTINGS"', self.panel)
+        self.assertIn("root.outputSummary", self.panel)
+
+    def test_queue_reports_only_items_the_bridge_accepted(self):
+        self.assertIn("@Slot(str, str, result=bool)", self.bridge)
+        self.assertIn("@Slot(str, result=bool)", self.bridge)
+        self.assertIn("return self._enqueue_download(url, options)", self.bridge)
+        self.assertIn("var added = 0", self.main)
+        self.assertIn("if (accepted)", self.main)
+        self.assertIn('"Nothing was added. Check the URLs and downloader settings."', self.main)
+
     def test_custom_preset_save_action_is_wired_to_the_bridge(self):
         self.assertIn("savePresetRequested", self.panel)
         self.assertIn("bridge.saveCustomPreset(optionsJson)", self.main)
