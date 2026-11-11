@@ -687,6 +687,54 @@ ApplicationWindow {
         enabled: window.hasTrack && !window.keyboardTextEntryActive
         onActivated: bridge.setVolume(Math.max(0.0, window.playerVolume - 0.05))
     }
+    Shortcut {
+        sequence: "Alt+Left"
+        context: Qt.WindowShortcut
+        enabled: window.page === "Discover" && window.searchHistoryIndex > 0 && !window.keyboardTextEntryActive
+        onActivated: window.goSearchBack()
+    }
+    Shortcut {
+        sequence: "Alt+Right"
+        context: Qt.WindowShortcut
+        enabled: window.page === "Discover" && window.searchHistoryIndex >= 0
+                 && window.searchHistoryIndex < window.searchHistory.length - 1 && !window.keyboardTextEntryActive
+        onActivated: window.goSearchForward()
+    }
+    Shortcut {
+        sequence: "Ctrl+R"
+        context: Qt.WindowShortcut
+        enabled: window.page === "Discover" && window.searchQuery.length > 0 && !window.searchBusy && !window.keyboardTextEntryActive
+        onActivated: window.repeatSearch()
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+H"
+        context: Qt.WindowShortcut
+        enabled: !window.keyboardTextEntryActive
+        onActivated: window.showDiscoverHome()
+    }
+    Shortcut {
+        sequence: "Escape"
+        context: Qt.WindowShortcut
+        enabled: window.page === "Discover" && window.detailData !== null && !window.keyboardTextEntryActive
+        onActivated: { window.detailData = null; window.detailLoading = false }
+    }
+    Shortcut { sequence: "Ctrl+1"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Discover") }
+    Shortcut { sequence: "Ctrl+2"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Downloader") }
+    Shortcut { sequence: "Ctrl+3"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Downloads") }
+    Shortcut { sequence: "Ctrl+4"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Library") }
+    Shortcut { sequence: "Ctrl+5"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Playlists") }
+    Shortcut { sequence: "Ctrl+6"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Converter") }
+    Shortcut {
+        sequence: "Ctrl+O"
+        context: Qt.WindowShortcut
+        enabled: !window.keyboardTextEntryActive
+        onActivated: bridge.openOutputFolder()
+    }
+    Shortcut {
+        sequence: "F11"
+        context: Qt.WindowShortcut
+        onActivated: window.toggleMaximize()
+    }
 
     // Edge grips so the frameless window can still be resized.
     component EdgeGrip: MouseArea {
