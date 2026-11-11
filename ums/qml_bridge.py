@@ -419,6 +419,42 @@ class AppBridge(QObject):
         return name
 
     @Slot(str, result=bool)
+    def isCustomPreset(self, name):
+        """Return whether a preset is user-defined and therefore removable."""
+        name = str(name or "").strip()
+        return bool(name and name not in PRESETS
+                    and name in self.settings.get("custom_presets", {}))
+
+    @Slot(str, result=bool)
+    def deleteCustomPreset(self, name):
+        """Permanently remove a user preset after an explicit confirmation."""
+        name = str(name or "").strip()
+        if not name or name in PRESETS:
+            self._notify("Built-in presets are protected and cannot be deleted.")
+            return False
+        custom = self.settings.get("custom_presets", {})
+        if name not in custom:
+            self._notify("That custom preset no longer exists.")
+            return False
+        answer = QMessageBox.question(
+            None,
+            "Delete custom preset?",
+            f"Delete “{name}” permanently? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return False
+        custom = dict(custom)
+        custom.pop(name, None)
+        self.settings["custom_presets"] = custom
+        self._persist()
+        self.presets = merged_presets(custom)
+        self.presetsChanged.emit(json.dumps(self.presets, ensure_ascii=False))
+        self._notify(f"Deleted custom preset: {name}")
+        return True
+
+    @Slot(str, result=bool)
     def enqueueSpotify(self, url):
         url = str(url).strip()
         if self.spotify_worker and self.spotify_worker.isRunning():
