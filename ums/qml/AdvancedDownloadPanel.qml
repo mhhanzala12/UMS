@@ -29,8 +29,17 @@ ColumnLayout {
         var video = String(videoCodec.currentText || "copy")
         if (!audioOnly && video !== "copy") {
             var mode = String(rateControl.currentText || "Source")
-            if ((mode === "CBR" || mode === "VBR") && !String(videoBitrate.text || "").trim())
+            var videoRate = String(videoBitrate.text || "").trim()
+            if ((mode === "CBR" || mode === "VBR") && !videoRate)
                 return mode + " mode needs a video bitrate, for example 2500k."
+            if (videoRate && !/^\d+(?:\.\d+)?\s*[kKmMgG]?$/.test(videoRate))
+                return "Video bitrate must look like 2500k, 2M, or 192k."
+            var profile = String(profileName.text || "").trim()
+            if (profile && !/^[A-Za-z0-9_.-]{1,32}$/.test(profile))
+                return "Codec profile may contain only letters, numbers, dots, underscores and hyphens."
+            var level = String(codecLevel.text || "").trim()
+            if (level && !/^\d{1,2}(?:\.\d{1,2})?$/.test(level))
+                return "Codec level must be numeric, for example 4.1."
             if (resolution.currentText === "Custom") {
                 var dimensions = /^(\d{2,5})x(\d{2,5})$/i.exec(String(customScale.text || "").trim())
                 if (!dimensions)
