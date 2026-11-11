@@ -75,7 +75,10 @@ class ModernAdvancedDownloaderTests(unittest.TestCase):
         self.assertIn("showSourceQuality: false", self.main)
         self.assertIn("conversionAdvancedPanel.options()", self.main)
         self.assertIn("bridge.enqueueConversionWithAdvancedOptions", self.main)
+        self.assertIn("@Slot(str, str, result=bool)", self.bridge)
         self.assertIn("def enqueueConversionWithAdvancedOptions(self, source, options_json)", self.bridge)
+        self.assertIn("if (accepted)", self.main)
+        self.assertIn("Conversion added to the queue.", self.main)
 
 
 if __name__ == "__main__":
