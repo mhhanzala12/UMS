@@ -699,14 +699,14 @@ ApplicationWindow {
     Shortcut {
         sequence: "Alt+Left"
         context: Qt.WindowShortcut
-        enabled: window.page === "Discover" && window.searchHistoryIndex > 0 && !window.keyboardTextEntryActive
+        enabled: window.page === "Discover" && window.searchHistoryIndex > 0 && !window.keyboardTextEntryActive && !window.searchBusy
         onActivated: window.goSearchBack()
     }
     Shortcut {
         sequence: "Alt+Right"
         context: Qt.WindowShortcut
         enabled: window.page === "Discover" && window.searchHistoryIndex >= 0
-                 && window.searchHistoryIndex < window.searchHistory.length - 1 && !window.keyboardTextEntryActive
+                 && window.searchHistoryIndex < window.searchHistory.length - 1 && !window.keyboardTextEntryActive && !window.searchBusy
         onActivated: window.goSearchForward()
     }
     Shortcut {
@@ -718,7 +718,7 @@ ApplicationWindow {
     Shortcut {
         sequence: "Ctrl+Shift+H"
         context: Qt.WindowShortcut
-        enabled: !window.keyboardTextEntryActive
+        enabled: !window.keyboardTextEntryActive && !window.searchBusy
         onActivated: window.showDiscoverHome()
     }
     Shortcut {
@@ -1358,6 +1358,51 @@ ApplicationWindow {
                 anchors.horizontalCenter: parent.horizontalCenter
                 spacing: 22
                 Item { Layout.preferredHeight: 14 }
+                RowLayout {
+                    visible: discoverFlick.idleState && searchHistory.length > 0
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Rectangle {
+                        Layout.preferredWidth: 32; Layout.preferredHeight: 32
+                        radius: 9
+                        color: idleBackMouse.containsMouse ? themeColors.panel2 : themeColors.panel
+                        border.color: themeColors.border
+                        opacity: searchHistoryIndex > 0 && !searchBusy ? 1 : 0.38
+                        Icon { anchors.centerIn: parent; name: "arrow-left"; color: themeColors.text; implicitWidth: 14; implicitHeight: 14 }
+                        MouseArea {
+                            id: idleBackMouse
+                            anchors.fill: parent; hoverEnabled: true
+                            enabled: searchHistoryIndex > 0 && !searchBusy
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: window.goSearchBack()
+                        }
+                    }
+                    Rectangle {
+                        Layout.preferredWidth: 32; Layout.preferredHeight: 32
+                        radius: 9
+                        color: idleForwardMouse.containsMouse ? themeColors.panel2 : themeColors.panel
+                        border.color: themeColors.border
+                        opacity: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1 && !searchBusy ? 1 : 0.38
+                        Icon { anchors.centerIn: parent; name: "arrow-right"; color: themeColors.text; implicitWidth: 14; implicitHeight: 14 }
+                        MouseArea {
+                            id: idleForwardMouse
+                            anchors.fill: parent; hoverEnabled: true
+                            enabled: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1 && !searchBusy
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: window.goSearchForward()
+                        }
+                    }
+                    Rectangle {
+                        Layout.preferredWidth: 32; Layout.preferredHeight: 32
+                        radius: 9
+                        color: themeColors.activeBg
+                        border.color: themeColors.borderHi
+                        opacity: 0.85
+                        Icon { anchors.centerIn: parent; name: "home"; color: themeColors.lime; implicitWidth: 14; implicitHeight: 14 }
+                    }
+                    Text { text: "Discover home"; color: themeColors.muted; font.pixelSize: 11; font.weight: Font.Medium }
+                    Item { Layout.fillWidth: true }
+                }
 
                 // Search bar
                 Rectangle {
@@ -1606,7 +1651,7 @@ ApplicationWindow {
                                     border.color: themeColors.border
                                     opacity: searchHistoryIndex > 0 ? 1 : 0.38
                                     Icon { anchors.centerIn: parent; name: "arrow-left"; color: themeColors.text; implicitWidth: 14; implicitHeight: 14 }
-                                    MouseArea { id: backSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: searchHistoryIndex > 0; cursorShape: Qt.PointingHandCursor; onClicked: window.goSearchBack() }
+                                    MouseArea { id: backSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: searchHistoryIndex > 0 && !searchBusy; cursorShape: Qt.PointingHandCursor; onClicked: window.goSearchBack() }
                                 }
                                 Rectangle {
                                     Layout.preferredWidth: 30; Layout.preferredHeight: 30
@@ -1615,7 +1660,7 @@ ApplicationWindow {
                                     border.color: themeColors.border
                                     opacity: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1 ? 1 : 0.38
                                     Icon { anchors.centerIn: parent; name: "arrow-right"; color: themeColors.text; implicitWidth: 14; implicitHeight: 14 }
-                                    MouseArea { id: forwardSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1; cursorShape: Qt.PointingHandCursor; onClicked: window.goSearchForward() }
+                                    MouseArea { id: forwardSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1 && !searchBusy; cursorShape: Qt.PointingHandCursor; onClicked: window.goSearchForward() }
                                 }
                                 Rectangle {
                                     Layout.preferredWidth: 30; Layout.preferredHeight: 30
@@ -1623,7 +1668,7 @@ ApplicationWindow {
                                     color: homeSearchMouse.containsMouse ? themeColors.panel2 : themeColors.panel3
                                     border.color: themeColors.border
                                     Icon { anchors.centerIn: parent; name: "home"; color: themeColors.lime; implicitWidth: 14; implicitHeight: 14 }
-                                    MouseArea { id: homeSearchMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: window.showDiscoverHome() }
+                                    MouseArea { id: homeSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: !searchBusy; cursorShape: Qt.PointingHandCursor; onClicked: window.showDiscoverHome() }
                                 }
                                 Text { text: "Results for"; color: themeColors.text; font.pixelSize: 16; font.weight: Font.Bold }
                                 Text { Layout.maximumWidth: 420; text: searchQuery; color: themeColors.lime; font.pixelSize: 16; font.weight: Font.Bold; elide: Text.ElideRight }
