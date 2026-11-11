@@ -96,7 +96,7 @@ ColumnLayout {
     signal savePresetRequested(string optionsJson)
     signal deletePresetRequested(string name)
 
-    component PaletteCombo: PaletteCombo {
+    component PaletteCombo: ComboBox {
         id: styledCombo
         implicitHeight: 36
         font.pixelSize: 11
