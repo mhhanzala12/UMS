@@ -1610,16 +1610,36 @@ ApplicationWindow {
                                 onClicked: {
                                     var urls = downloadUrls.text.split(/\r?\n/).map(function(v){return v.trim()}).filter(function(v){return v.length})
                                     if (!urls.length) { toast.showMessage("Paste one or more media URLs first.", true); return }
-                                    var optionsJson = JSON.stringify(advancedDownloadPanel.options())
-                                    for (var i = 0; i < urls.length; i++) {
-                                        if (/open\.spotify\.com\/(track|album|playlist)\//i.test(urls[i]))
-                                            bridge.enqueueSpotify(urls[i])
-                                        else
-                                            bridge.enqueueDownloadWithOptions(urls[i], optionsJson)
+                                    if (advancedDownloadPanel.validationMessage.length) {
+                                        toast.showMessage(advancedDownloadPanel.validationMessage, true)
+                                        return
                                     }
-                                    toast.showMessage("Added " + urls.length + " URL(s) to the queue.")
-                                    downloadUrls.text = ""
-                                    setPage("Downloads")
+                                    var optionsJson = JSON.stringify(advancedDownloadPanel.options())
+                                    var added = 0
+                                    var skipped = 0
+                                    for (var i = 0; i < urls.length; i++) {
+                                        var accepted = false
+                                        if (/open\.spotify\.com\/(track|album|playlist)\//i.test(urls[i]))
+                                            accepted = bridge.enqueueSpotify(urls[i])
+                                        else
+                                            accepted = bridge.enqueueDownloadWithOptions(urls[i], optionsJson)
+                                        if (accepted)
+                                            added++
+                                        else
+                                            skipped++
+                                    }
+                                    if (added > 0) {
+                                        toast.showMessage(
+                                            "Added " + added + " item(s)" + (skipped ? " · skipped " + skipped : "") + "."
+                                        )
+                                        downloadUrls.text = ""
+                                        setPage("Downloads")
+                                    } else {
+                                        toast.showMessage(
+                                            "Nothing was added. Check the URLs and downloader settings.",
+                                            true
+                                        )
+                                    }
                                 }
                                 background: Rectangle { radius: 8; color: themeColors.lime }
                                 contentItem: Text { text: parent.text; color: "#14190b"; font.pixelSize: 10; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; padding: 9 }
