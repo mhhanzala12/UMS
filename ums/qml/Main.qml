@@ -1398,7 +1398,7 @@ ApplicationWindow {
                         color: themeColors.activeBg
                         border.color: themeColors.borderHi
                         opacity: 0.85
-                        Icon { anchors.centerIn: parent; name: "home"; color: themeColors.lime; implicitWidth: 14; implicitHeight: 14 }
+                        Text { anchors.centerIn: parent; text: "⌂"; color: themeColors.lime; font.pixelSize: 18; font.weight: Font.DemiBold }
                     }
                     Text { text: "Discover home"; color: themeColors.muted; font.pixelSize: 11; font.weight: Font.Medium }
                     Item { Layout.fillWidth: true }
@@ -1667,7 +1667,7 @@ ApplicationWindow {
                                     radius: 9
                                     color: homeSearchMouse.containsMouse ? themeColors.panel2 : themeColors.panel3
                                     border.color: themeColors.border
-                                    Icon { anchors.centerIn: parent; name: "home"; color: themeColors.lime; implicitWidth: 14; implicitHeight: 14 }
+                                    Text { anchors.centerIn: parent; text: "⌂"; color: themeColors.lime; font.pixelSize: 18; font.weight: Font.DemiBold }
                                     MouseArea { id: homeSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: !searchBusy; cursorShape: Qt.PointingHandCursor; onClicked: window.showDiscoverHome() }
                                 }
                                 Text { text: "Results for"; color: themeColors.text; font.pixelSize: 16; font.weight: Font.Bold }
