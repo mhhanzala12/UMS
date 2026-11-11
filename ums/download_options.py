@@ -105,10 +105,10 @@ _ENCODERS_BY_CODEC = {
     "mpeg2": {"mpeg2video"},
     "theora": {"libtheora"},
 }
-_BITRATE_RE = re.compile(r"^(?:\\d+(?:\\.\\d+)?)(?:[kKmMgG])?$")
+_BITRATE_RE = re.compile(r"^(?:\d+(?:\.\d+)?)(?:[kKmMgG])?$")
 _PROFILE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
-_LEVEL_RE = re.compile(r"^\\d{1,2}(?:\\.\\d{1,2})?$")
-_DIMENSIONS_RE = re.compile(r"^(\\d{2,5})x(\\d{2,5})$", re.IGNORECASE)
+_LEVEL_RE = re.compile(r"^\d{1,2}(?:\.\d{1,2})?$")
+_DIMENSIONS_RE = re.compile(r"^(\d{2,5})x(\d{2,5})$", re.IGNORECASE)
 
 
 def _parse_bitrate(value: str, label: str) -> str:
@@ -117,7 +117,7 @@ def _parse_bitrate(value: str, label: str) -> str:
         return ""
     if not _BITRATE_RE.fullmatch(text):
         raise ValueError(f"{label} must look like 4500k, 2M, or 192k.")
-    amount = re.match(r"^\\d+(?:\\.\\d+)?", text)
+    amount = re.match(r"^\d+(?:\.\d+)?", text)
     if not amount or float(amount.group(0)) <= 0:
         raise ValueError(f"{label} must be greater than zero.")
     return text
