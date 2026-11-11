@@ -54,6 +54,34 @@ class DownloadOptionsTests(unittest.TestCase):
                 self.assertEqual(options[key], value)
         self.assertNotIn("not_an_option", options)
 
+    def test_bitrate_level_and_custom_dimension_patterns_accept_valid_values(self):
+        options = sanitize_download_options({
+            "container": "3gp",
+            "video_codec": "mpeg4",
+            "audio_codec": "aac",
+            "rate_control": "CBR",
+            "video_bitrate": "250k",
+            "resolution": "Custom",
+            "custom_scale": "320x240",
+            "fps": "20",
+            "profile": "simple",
+            "level": "4.1",
+        })
+        self.assertEqual(options["video_bitrate"], "250k")
+        self.assertEqual(options["custom_scale"], "320x240")
+        self.assertEqual(options["level"], "4.1")
+
+    def test_malformed_bitrate_level_and_dimensions_are_rejected(self):
+        cases = (
+            ({"video_codec": "h264", "rate_control": "CBR", "video_bitrate": "fast"}, "Video bitrate"),
+            ({"level": "level-four"}, "Codec level"),
+            ({"resolution": "Custom", "custom_scale": "not-a-size"}, "Custom resolution"),
+        )
+        for payload, message in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(ValueError, message):
+                    sanitize_download_options(payload)
+
     def test_container_allowlist_is_explicit(self):
         self.assertIn("3gp", OUTPUT_CONTAINERS)
         self.assertIn("webm", OUTPUT_CONTAINERS)
