@@ -339,6 +339,8 @@ ApplicationWindow {
         if (selectedProviderIndex >= 0)
             providerBox.currentIndex = selectedProviderIndex
         searchHistory = searchHistory.slice(0, searchHistoryIndex + 1)
+        if (!searchHistory.length || (searchHistory[searchHistory.length - 1].query || "") !== "")
+            searchHistory.push({ query: "", provider: "All catalogs", tab: "All", results: [], home: true })
         searchHistory.push({ query: text, provider: searchProvider, tab: "All", results: [] })
         if (searchHistory.length > 30)
             searchHistory.shift()
@@ -377,6 +379,14 @@ ApplicationWindow {
     function goSearchBack() { restoreSearchHistory(searchHistoryIndex - 1) }
     function goSearchForward() { restoreSearchHistory(searchHistoryIndex + 1) }
     function showDiscoverHome() {
+        var currentIsHome = searchQuery.length === 0 && searchItems.length === 0 && detailData === null
+        if (!currentIsHome) {
+            searchHistory = searchHistory.slice(0, searchHistoryIndex + 1)
+            searchHistory.push({ query: "", provider: "All catalogs", tab: "All", results: [], home: true })
+            if (searchHistory.length > 30)
+                searchHistory.shift()
+            searchHistoryIndex = searchHistory.length - 1
+        }
         searchQuery = ""
         searchProvider = "All catalogs"
         searchKind = "All"
@@ -385,7 +395,6 @@ ApplicationWindow {
         searchBusy = false
         detailData = null
         detailLoading = false
-        searchHistoryIndex = -1
         providerBox.currentIndex = 0
         setPage("Discover")
     }
