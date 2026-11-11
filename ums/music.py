@@ -290,7 +290,8 @@ def _search_spotify(query: str, limit: int, kind: str = "All") -> list[dict]:
             continue
         images = row.get("images") or []
         owner = (row.get("owner") or {}).get("display_name") or "Unknown creator"
-        track_total = (row.get("tracks") or {}).get("total")
+        # Spotify's current Search response uses playlist.items; tracks is deprecated.
+        track_total = (row.get("items") or row.get("tracks") or {}).get("total")
         results.append({
             "kind": "Playlists", "provider": "Spotify", "title": row.get("name") or "Untitled playlist",
             "artist": owner, "album": f"{track_total} tracks" if isinstance(track_total, int) else "",
