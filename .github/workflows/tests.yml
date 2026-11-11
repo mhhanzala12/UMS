@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# Avoid stacking obsolete runs when several small fixes are pushed in sequence.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit-tests:
     runs-on: ubuntu-latest
