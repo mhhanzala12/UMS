@@ -28,6 +28,44 @@ def _is_browser_cookie_access_error(exc: BaseException) -> bool:
     ))
 
 
+def _run_with_cookie_fallback(
+    options: dict,
+    operation,
+    *,
+    related_options: tuple[dict, ...] = (),
+    log_cb=None,
+    fallback_state: dict | None = None,
+    task_label: str = "media request",
+):
+    """Run one yt-dlp operation, retrying once if browser cookies are locked.
+
+    The retry is scoped to this operation only. The user's persisted settings
+    remain unchanged; signed-in-only sources will still report their auth error.
+    """
+    try:
+        return operation()
+    except Exception as exc:
+        if "cookiesfrombrowser" not in options or not _is_browser_cookie_access_error(exc):
+            raise
+
+        for candidate in (options, *related_options):
+            candidate.pop("cookiesfrombrowser", None)
+        if fallback_state is not None:
+            fallback_state["used"] = True
+        message = (
+            "The browser cookie database is locked or unreadable. "
+            f"Retrying this {task_label} without browser cookies; close the browser "
+            "fully if the source requires a signed-in session."
+        )
+        if log_cb:
+            log_cb(message)
+        _LOG.warning(
+            "yt-dlp could not read the selected browser cookie database; retrying %s without browser cookies",
+            task_label,
+        )
+        return operation()
+
+
 def _extract_info_with_cookie_fallback(
     yt_dlp_module,
     options: dict,
@@ -37,34 +75,18 @@ def _extract_info_with_cookie_fallback(
     related_options: tuple[dict, ...] = (),
     log_cb=None,
     fallback_state: dict | None = None,
+    task_label: str = "media analysis",
 ):
-    """Retry once without browser cookies when the browser locks its SQLite DB.
-
-    Public music search/downloads should still work when cookies are optional.
-    We never rewrite the user's setting: if a private source needs authentication,
-    its subsequent error remains visible with guidance to close the browser.
-    """
+    """Call extract_info with the shared, one-time browser-cookie fallback."""
     def extract():
         with yt_dlp_module.YoutubeDL(options) as ydl:
             return ydl.extract_info(url, download=download)
 
-    try:
-        return extract()
-    except Exception as exc:
-        if "cookiesfrombrowser" not in options or not _is_browser_cookie_access_error(exc):
-            raise
-
-        for candidate in (options, *related_options):
-            candidate.pop("cookiesfrombrowser", None)
-        if fallback_state is not None:
-            fallback_state["used"] = True
-        if log_cb:
-            log_cb(
-                "The browser cookie database is locked or unreadable. "
-                "Retrying this music request without browser cookies; close the browser "
-                "fully if the source requires a signed-in session."
-            )
-        _LOG.warning(
-            "yt-dlp could not read the selected browser cookie database; retrying without browser cookies"
-        )
-        return extract()
+    return _run_with_cookie_fallback(
+        options,
+        extract,
+        related_options=related_options,
+        log_cb=log_cb,
+        fallback_state=fallback_state,
+        task_label=task_label,
+    )
