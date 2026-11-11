@@ -1610,13 +1610,17 @@ ApplicationWindow {
                                 onClicked: {
                                     var urls = downloadUrls.text.split(/\r?\n/).map(function(v){return v.trim()}).filter(function(v){return v.length})
                                     if (!urls.length) { toast.showMessage("Paste one or more media URLs first.", true); return }
+                                    if (urls.length > 100) {
+                                        toast.showMessage("Please add at most 100 URLs per batch.", true)
+                                        return
+                                    }
                                     if (advancedDownloadPanel.validationMessage.length) {
                                         toast.showMessage(advancedDownloadPanel.validationMessage, true)
                                         return
                                     }
                                     var optionsJson = JSON.stringify(advancedDownloadPanel.options())
                                     var added = 0
-                                    var skipped = 0
+                                    var skippedUrls = []
                                     for (var i = 0; i < urls.length; i++) {
                                         var accepted = false
                                         if (/open\.spotify\.com\/(track|album|playlist)\//i.test(urls[i]))
@@ -1626,13 +1630,15 @@ ApplicationWindow {
                                         if (accepted)
                                             added++
                                         else
-                                            skipped++
+                                            skippedUrls.push(urls[i])
                                     }
                                     if (added > 0) {
                                         toast.showMessage(
-                                            "Added " + added + " item(s)" + (skipped ? " · skipped " + skipped : "") + "."
+                                            "Added " + added + " item(s)" + (skippedUrls.length ? " · skipped " + skippedUrls.length : "") + "."
                                         )
-                                        downloadUrls.text = ""
+                                        // Keep rejected links in the editor so the user can correct
+                                        // them instead of silently losing them.
+                                        downloadUrls.text = skippedUrls.join("\n")
                                         setPage("Downloads")
                                     } else {
                                         toast.showMessage(
