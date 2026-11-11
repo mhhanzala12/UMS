@@ -2345,7 +2345,16 @@ ApplicationWindow {
                             }
                         }
                         Button { text: "Add conversion to queue  →"
- onClicked: bridge.enqueueConversionWithAdvancedOptions(conversionSource.text, JSON.stringify(conversionAdvancedPanel.options()))
+ onClicked: {
+      if (conversionAdvancedPanel.validationMessage.length) {
+          toast.showMessage(conversionAdvancedPanel.validationMessage, true)
+          return
+      }
+      bridge.enqueueConversionWithAdvancedOptions(
+          conversionSource.text,
+          JSON.stringify(conversionAdvancedPanel.options())
+      )
+  }
  background: Rectangle { radius: 8
  color: themeColors.lime }
  contentItem: Text { text: parent.text
