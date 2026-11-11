@@ -166,10 +166,11 @@ The PySide6 desktop app includes a native music workspace for catalog discovery,
 
 ### Music discovery and tagged audio
 
-- Search track metadata in Deezer and Apple Music catalogs.
-- Search YouTube and SoundCloud through yt-dlp's supported search extractors.
+- Search all catalogs by default: Deezer, Apple Music, YouTube Music, and SoundCloud. Spotify catalog metadata joins the aggregate when its official API credentials are configured.
+- Search tracks from YouTube Music and SoundCloud through yt-dlp; search tracks, artists, and albums from Apple Music's iTunes Search catalog and Deezer. Deezer and Spotify provide playlist discovery.
+- Results have separate layouts for tracks, artists, and albums. Search history includes Back, Forward, and Home navigation and retains recent results in memory while the app is open.
 - Look up lyrics through LRCLIB, prefer timestamped LRC results, click a timed line to seek the existing player, and follow the active line with smooth scrolling and a focused full-screen lyrics view. Plain lyrics remain available when a synchronized version is not provided.
-- Paste a public Spotify track, album, or playlist URL. The app reads public Spotify embed metadata without a Spotify client ID, client secret, or user token, then searches YouTube with yt-dlp for each track and converts/tags the match with FFmpeg. No spotDL or Spotify API credentials are used. Spotify's embed structure is undocumented; playlists longer than 100 items are extended through an anonymous embed-player endpoint on a best-effort basis.
+- Paste a public Spotify track, album, or playlist URL. Link resolution reads public Spotify embed metadata without catalog API credentials, then matches the tracks with yt-dlp. This is separate from Spotify catalog search, which uses Spotify's official Web API Client Credentials flow. No spotDL or DRM bypass is used.
 - Music matching uses yt-dlp with its default extras and an available JavaScript runtime for current YouTube challenge handling. FFmpeg is required for MP3 extraction, metadata tagging, and artwork embedding. Mutagen is used for reading local library tags and embedded cover art.
 
 ### Local library and playlists
@@ -181,11 +182,63 @@ The PySide6 desktop app includes a native music workspace for catalog discovery,
 
 ### Run
 
-The desktop application now launches its native QML interface. The original Python media engine, queue workers, settings, and presets remain the backend. The QML interface includes animated navigation, music discovery, Spotify link resolution, downloads, a persistent local player, conversion controls, library, playlists, and settings. To start, use the existing launcher. Music search/download uses the yt-dlp dependency in `requirements.txt`; Mutagen is included there for local tags and embedded artwork. No spotDL install or Spotify developer credentials are needed.
+The desktop application launches its native QML interface. The original Python media engine, queue workers, settings, and presets remain the backend. Music search/download uses yt-dlp from `requirements.txt`; Mutagen handles local tags and embedded artwork. Spotify link resolution does not need developer credentials, but Spotify catalog search is optional and requires the environment variables documented below.
 
 Music catalog and lyrics search require an internet connection. Search results are metadata from the selected public providers; availability and source matching vary by provider and location. Use downloads only for media you are authorized to save.
 
 This native implementation adapts Unstream-inspired music workflows to PySide6 rather than running Unstream's separate React/FastAPI application. Music sub-navigation uses a compact segmented switcher with animated fade transitions instead of visible nested tabs. The native UI now includes the searchable/sortable music library, artwork and tags, local playlists, and a persistent player with track navigation. Catalog search and lyrics use public providers; Spotify collection metadata is resolved from public embed pages, then each track is matched with yt-dlp.
+
+
+### Spotify catalog search setup
+
+Spotify link resolution remains credential-free, but Spotify catalog search uses the official Web API. Set these environment variables before launching UMS; the app keeps credentials out of its local settings file:
+
+**Windows PowerShell**
+
+```powershell
+$env:UMS_SPOTIFY_CLIENT_ID = "your-client-id"
+$env:UMS_SPOTIFY_CLIENT_SECRET = "your-client-secret"
+python app.py
+```
+
+**Windows Command Prompt**
+
+```bat
+set UMS_SPOTIFY_CLIENT_ID=your-client-id
+set UMS_SPOTIFY_CLIENT_SECRET=your-client-secret
+python app.py
+```
+
+**Linux / macOS**
+
+```bash
+export UMS_SPOTIFY_CLIENT_ID="your-client-id"
+export UMS_SPOTIFY_CLIENT_SECRET="your-client-secret"
+python app.py
+```
+
+Optionally set `UMS_SPOTIFY_MARKET` to a two-letter country code (default: `US`). Spotify's current Search API returns up to 10 results per requested type; results are not audio files or playback access. Spotify Development Mode has current account/app restrictions, including an active Premium requirement for the app owner and a five-user cap for new apps; see [Spotify's February 2026 migration guide](https://developer.spotify.com/documentation/web-api/tutorials/february-2026-migration-guide). See also [Client Credentials](https://developer.spotify.com/documentation/web-api/tutorials/client-credentials-flow) and [Search for Item](https://developer.spotify.com/documentation/web-api/reference/search).
+
+### Search & Explore keyboard shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+K` | Focus global search |
+| `Alt+Left` / `Alt+Right` | Previous / next search |
+| `Ctrl+Shift+H` | Return to Discover home |
+| `Ctrl+R` | Repeat the current catalog search |
+| `Escape` | Close an open collection detail |
+| `Ctrl+1` – `Ctrl+6` | Discover, Downloader, Downloads, Library, Playlists, Converter |
+| `Ctrl+O` | Open output folder |
+| `F11` | Maximize / restore window |
+| `Space` | Play / pause |
+| `Ctrl+Left` / `Ctrl+Right` | Previous / next track |
+| `Shift+Left` / `Shift+Right` | Seek backward / forward 5 seconds |
+| `Ctrl+Up` / `Ctrl+Down` | Raise / lower volume |
+| `M` | Mute / unmute |
+| `Ctrl+L` | Find current track lyrics |
+
+Shortcuts that act on the app are suppressed while a text field has focus. Search history is session-local and is not saved across application restarts. Built-in presets remain protected; custom presets can be permanently deleted after confirmation.
 
 ## Native QML desktop interface
 
@@ -198,6 +251,6 @@ The desktop shell is implemented in **PySide6 + Qt Quick (QML)**. It uses the or
 
 ### Native QML music discovery and general media downloads
 
-The native desktop UI includes a music-first Discover view with catalog filters for tracks, artists, albums, and playlists. Deezer's public catalog provides artist/album/playlist results; track search can combine Deezer, Apple Music previews, YouTube, and SoundCloud via yt-dlp. Track results can be previewed when a source preview exists, matched for download, or opened for lyrics.
+The native desktop UI includes a music-first Discover view with catalog filters for tracks, artists, albums, and playlists. With the provider selector left on **All catalogs**, UMS searches Deezer, Apple Music, YouTube Music, and SoundCloud; Spotify is included when credentials are configured. Artist and Album tabs use dedicated artwork card layouts, while Tracks and Playlists use their own result lists. Catalogs expose only the object types supported by each provider.
 
 The dedicated **Downloader** page accepts one or multiple URLs (one per line) from YouTube and other sites supported by yt-dlp, lets you analyze the first URL, choose a quality preset and output container, and queue tasks. Public Spotify track, album, and playlist URLs are resolved from public embed metadata without Spotify API credentials; the resulting track list is matched against YouTube via yt-dlp. Spotify metadata does not itself provide the audio stream.
