@@ -2356,11 +2356,14 @@ ApplicationWindow {
           toast.showMessage(conversionAdvancedPanel.validationMessage, true)
           return
       }
-      bridge.enqueueConversionWithAdvancedOptions(
+      var accepted = bridge.enqueueConversionWithAdvancedOptions(
           conversionSource.text,
           JSON.stringify(conversionAdvancedPanel.options())
       )
-  }
+      if (accepted) {
+          toast.showMessage("Conversion added to the queue.")
+          setPage("Downloads")
+      }
  background: Rectangle { radius: 8
  color: themeColors.lime }
  contentItem: Text { text: parent.text
