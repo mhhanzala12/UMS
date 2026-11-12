@@ -88,13 +88,17 @@ def _get_json(url: str, *, retries: int = 1) -> dict:
                 ) from exc
             if not isinstance(data, dict):
                 raise RuntimeError("Provider returned an unexpected JSON response.")
-            with _JSON_CACHE_LOCK:
-                if len(_JSON_CACHE) >= _JSON_CACHE_MAX:
-                    stale_count = max(1, _JSON_CACHE_MAX // 4)
-                    stale_keys = sorted(_JSON_CACHE, key=lambda key: _JSON_CACHE[key][0])[:stale_count]
-                    for stale in stale_keys:
-                        _JSON_CACHE.pop(stale, None)
-                _JSON_CACHE[url] = (time.monotonic(), data)
+            # Deezer uses HTTP 200 for API-level errors (for example quota
+            # exhaustion). Never cache those envelopes or retries will replay
+            # the same failure without contacting the API again.
+            if not data.get("error"):
+                with _JSON_CACHE_LOCK:
+                    if len(_JSON_CACHE) >= _JSON_CACHE_MAX:
+                        stale_count = max(1, _JSON_CACHE_MAX // 4)
+                        stale_keys = sorted(_JSON_CACHE, key=lambda key: _JSON_CACHE[key][0])[:stale_count]
+                        for stale in stale_keys:
+                            _JSON_CACHE.pop(stale, None)
+                    _JSON_CACHE[url] = (time.monotonic(), data)
             return data
         except HTTPError as exc:
             body = exc.read(512).decode("utf-8", errors="replace").strip()
