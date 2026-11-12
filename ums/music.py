@@ -860,10 +860,14 @@ class CatalogSearchWorker(QThread):
     failed = Signal(str)
 
     def __init__(self, query: str, provider: str = "All", kind: str = "All", parent=None):
+        # The legacy Widgets page historically passed the parent as the third
+        # positional argument; keep that call compatible while QML passes kind.
+        if parent is None and not isinstance(kind, str):
+            parent, kind = kind, "All"
         super().__init__(parent)
         self.query = str(query or "").strip()
         self.provider = str(provider or "All")
-        self.kind = str(kind or "All")
+        self.kind = kind.strip() if isinstance(kind, str) and kind.strip() else "All"
 
     def run(self):
         try:
