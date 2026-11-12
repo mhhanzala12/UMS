@@ -8,7 +8,7 @@ ColumnLayout {
     property var palette: ({})
     property var presets: ({})
     property string selectedPreset: "Best Available Quality"
-    property bool expanded: true
+    property bool expanded: false
     property bool showSourceQuality: true
     property string activeSection: "source"
     readonly property string outputSummary: {
@@ -99,7 +99,8 @@ ColumnLayout {
     component PaletteCombo: ComboBox {
         id: styledCombo
         implicitHeight: 36
-        font.pixelSize: 11
+        font.pixelSize: 12
+        hoverEnabled: true
         palette.text: root.palette.text || "#e9ece4"
         palette.buttonText: root.palette.text || "#e9ece4"
         palette.base: root.palette.panel2 || "#171b13"
@@ -110,46 +111,67 @@ ColumnLayout {
             border.color: styledCombo.popup.visible || styledCombo.hovered
                           ? (root.palette.borderHi || "#39432d") : (root.palette.border || "#252b20")
         }
-        contentItem: TextField {
-            leftPadding: 11
-            rightPadding: 30
-            text: styledCombo.editable ? styledCombo.editText : styledCombo.displayText
-            color: styledCombo.enabled ? (root.palette.text || "#e9ece4") : (root.palette.subtle || "#626a59")
-            placeholderTextColor: root.palette.subtle || "#626a59"
-            font.pixelSize: 11
-            font.weight: Font.Medium
-            verticalAlignment: TextInput.AlignVCenter
-            selectByMouse: styledCombo.editable
-            readOnly: !styledCombo.editable
-            background: null
-            onTextEdited: if (styledCombo.editable) styledCombo.editText = text
+        // Do not put a read-only TextField over non-editable choices: it can
+        // intercept the pointer and make the visible row feel smaller.
+        contentItem: Item {
+            implicitHeight: 36
+            Text {
+                visible: !styledCombo.editable
+                anchors.fill: parent
+                leftPadding: 12
+                rightPadding: 34
+                text: styledCombo.displayText
+                color: styledCombo.enabled ? (root.palette.text || "#e9ece4") : (root.palette.subtle || "#626a59")
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+            }
+            TextField {
+                visible: styledCombo.editable
+                anchors.fill: parent
+                leftPadding: 11
+                rightPadding: 34
+                text: styledCombo.editText
+                color: styledCombo.enabled ? (root.palette.text || "#e9ece4") : (root.palette.subtle || "#626a59")
+                placeholderTextColor: root.palette.subtle || "#626a59"
+                font.pixelSize: 11
+                font.weight: Font.Medium
+                verticalAlignment: TextInput.AlignVCenter
+                selectByMouse: true
+                background: null
+                onTextEdited: styledCombo.editText = text
+            }
         }
         indicator: Text {
-            x: styledCombo.width - width - 11
+            x: styledCombo.width - width - 12
             y: (styledCombo.height - height) / 2
+            width: 14
             text: styledCombo.popup.visible ? "⌃" : "⌄"
             color: root.palette.muted || "#8d9582"
             font.pixelSize: 14
         }
         delegate: ItemDelegate {
             id: comboItem
+            required property int index
             width: styledCombo.width - 8
-            height: 34
+            height: 36
             padding: 0
+            hoverEnabled: true
             contentItem: RowLayout {
                 spacing: 6
                 Text {
                     Layout.fillWidth: true
                     leftPadding: 10
-                    text: styledCombo.textAt(index)
-                    color: styledCombo.currentIndex === index
+                    text: styledCombo.textAt(comboItem.index)
+                    color: styledCombo.currentIndex === comboItem.index
                            ? (root.palette.lime || "#c8f24f") : (root.palette.text || "#e9ece4")
-                    font.pixelSize: 11
-                    font.weight: styledCombo.currentIndex === index ? Font.Bold : Font.Medium
+                    font.pixelSize: 12
+                    font.weight: styledCombo.currentIndex === comboItem.index ? Font.Bold : Font.Medium
                     elide: Text.ElideRight
                 }
                 Text {
-                    visible: styledCombo.currentIndex === index
+                    visible: styledCombo.currentIndex === comboItem.index
                     text: "✓"
                     color: root.palette.lime || "#c8f24f"
                     font.pixelSize: 12
@@ -159,6 +181,23 @@ ColumnLayout {
             background: Rectangle {
                 radius: 7
                 color: comboItem.hovered ? (root.palette.panel3 || "#1d2218") : "transparent"
+            }
+            MouseArea {
+                anchors.fill: parent
+                z: 10
+                acceptedButtons: Qt.LeftButton
+                hoverEnabled: true
+                preventStealing: false
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    var selected = comboItem.index
+                    if (styledCombo.editable)
+                        styledCombo.editText = styledCombo.textAt(selected)
+                    styledCombo.currentIndex = selected
+                    styledCombo.highlightedIndex = selected
+                    styledCombo.activated(selected)
+                    styledCombo.popup.close()
+                }
             }
         }
         popup: Popup {
@@ -172,6 +211,7 @@ ColumnLayout {
                 implicitHeight: contentHeight
                 model: styledCombo.popup.visible ? styledCombo.delegateModel : null
                 currentIndex: styledCombo.highlightedIndex
+                boundsBehavior: Flickable.StopAtBounds
                 ScrollIndicator.vertical: ScrollIndicator {}
             }
             background: Rectangle {
