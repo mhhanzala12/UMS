@@ -180,11 +180,13 @@ ColumnLayout {
             }
             background: Rectangle {
                 radius: 7
-                color: comboItem.hovered ? (root.palette.panel3 || "#1d2218") : "transparent"
+                color: rowHitArea.containsMouse ? (root.palette.panel3 || "#1d2218") : "transparent"
             }
             MouseArea {
+                id: rowHitArea
                 anchors.fill: parent
                 z: 10
+                enabled: styledCombo.enabled
                 acceptedButtons: Qt.LeftButton
                 hoverEnabled: true
                 preventStealing: false
