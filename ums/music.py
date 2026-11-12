@@ -57,33 +57,114 @@ _JSON_CACHE_TTL = 120.0
 _JSON_CACHE_MAX = 96
 
 
-def _get_json(url: str) -> dict:
-    """GET + decode JSON with a short TTL cache.
-
-    Re-opening an album, going back to a search, or re-running the same query
-    no longer repeats identical Deezer/iTunes round-trips.
-    """
+def _get_json(url: str, *, retries: int = 1) -> dict:
+    """Fetch and cache JSON with bounded retries and useful HTTP diagnostics."""
     now = time.monotonic()
     with _JSON_CACHE_LOCK:
         hit = _JSON_CACHE.get(url)
         if hit and now - hit[0] < _JSON_CACHE_TTL:
             return hit[1]
-    request = Request(url, headers={"User-Agent": "UniversalMediaStudio/1.0 (local desktop app)"})
-    with urlopen(request, timeout=12) as response:
-        data = json.loads(response.read().decode("utf-8"))
-    with _JSON_CACHE_LOCK:
-        if len(_JSON_CACHE) >= _JSON_CACHE_MAX:
-            for stale in sorted(_JSON_CACHE, key=lambda key: _JSON_CACHE[key][0])[: _JSON_CACHE_MAX // 4]:
-                _JSON_CACHE.pop(stale, None)
-        _JSON_CACHE[url] = (now, data)
-    return data
+
+    from urllib.error import HTTPError, URLError
+
+    last_error = None
+    for attempt in range(max(0, retries) + 1):
+        request = Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "UniversalMediaStudio/1.0 (local desktop app)",
+            },
+        )
+        try:
+            with urlopen(request, timeout=15) as response:
+                raw = response.read()
+            try:
+                data = json.loads(raw.decode("utf-8-sig"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                preview = raw[:180].decode("utf-8", errors="replace").replace("\n", " ")
+                raise RuntimeError(
+                    f"Provider returned invalid JSON ({preview or 'empty response'})."
+                ) from exc
+            if not isinstance(data, dict):
+                raise RuntimeError("Provider returned an unexpected JSON response.")
+            with _JSON_CACHE_LOCK:
+                if len(_JSON_CACHE) >= _JSON_CACHE_MAX:
+                    stale_count = max(1, _JSON_CACHE_MAX // 4)
+                    stale_keys = sorted(_JSON_CACHE, key=lambda key: _JSON_CACHE[key][0])[:stale_count]
+                    for stale in stale_keys:
+                        _JSON_CACHE.pop(stale, None)
+                _JSON_CACHE[url] = (time.monotonic(), data)
+            return data
+        except HTTPError as exc:
+            body = exc.read(512).decode("utf-8", errors="replace").strip()
+            last_error = RuntimeError(
+                f"HTTP {exc.code} from {exc.url}: {body[:180] or exc.reason}"
+            )
+            retryable = exc.code in {408, 425, 429, 500, 502, 503, 504}
+            if not retryable or attempt >= retries:
+                raise last_error from exc
+            retry_after = 0.0
+            try:
+                retry_after = min(2.0, max(0.0, float(exc.headers.get("Retry-After", 0))))
+            except (TypeError, ValueError, AttributeError):
+                pass
+            time.sleep(retry_after or (0.35 * (2 ** attempt)))
+        except URLError as exc:
+            last_error = RuntimeError(f"Network error contacting {url}: {exc.reason}")
+            if attempt >= retries:
+                raise last_error from exc
+            time.sleep(0.25 * (2 ** attempt))
+    raise last_error or RuntimeError(f"Could not fetch {url}.")
 
 
 def _search_deezer(query: str, kind: str, limit: int) -> list[dict]:
-    endpoint = {"Artists": "artist", "Albums": "album", "Playlists": "playlist"}.get(kind, "track")
-    data = _get_json("https://api.deezer.com/search/" + endpoint + "?" + urlencode({"q": query, "limit": limit}))
+    """Search Deezer's public catalogue and validate its HTTP-200 error envelope."""
+    endpoint = {"Artists": "artist", "Albums": "album", "Playlists": "playlist"}.get(kind)
+    params = urlencode({"q": query, "limit": min(100, max(1, int(limit)))})
+    # Deezer documents /search?q=... as the standard track search route.
+    # Keep the typed route as a fallback for older regional edge deployments.
+    urls = (
+        [f"https://api.deezer.com/search?{params}",
+         f"https://api.deezer.com/search/track?{params}"]
+        if endpoint is None
+        else [f"https://api.deezer.com/search/{endpoint}?{params}"]
+    )
+
+    data = None
+    errors = []
+    for url in urls:
+        for attempt in range(2):
+            try:
+                payload = _get_json(url)
+                api_error = payload.get("error")
+                if api_error:
+                    code = api_error.get("code") if isinstance(api_error, dict) else "unknown"
+                    message = api_error.get("message") if isinstance(api_error, dict) else str(api_error)
+                    if str(code) == "4" and attempt == 0:
+                        # Deezer represents quota exhaustion in JSON, often with HTTP 200.
+                        time.sleep(0.55)
+                        continue
+                    raise RuntimeError(f"Deezer API error {code}: {message or 'request rejected'}")
+                rows = payload.get("data")
+                if not isinstance(rows, list):
+                    raise RuntimeError("Deezer returned an unexpected search payload (missing data list).")
+                data = rows
+                break
+            except Exception as exc:
+                errors.append(str(exc))
+                break
+        if data is not None:
+            break
+
+    if data is None:
+        details = " | ".join(errors[:2]) or "no response from Deezer"
+        raise RuntimeError(f"Deezer search is unavailable: {details}")
+
     results: list[dict] = []
-    for row in data.get("data", []):
+    for row in data:
+        if not isinstance(row, dict):
+            continue
         if endpoint == "artist":
             title = row.get("name") or "Unknown artist"
             results.append({"kind": "Artists", "provider": "Deezer", "title": title, "artist": title,
@@ -107,13 +188,14 @@ def _search_deezer(query: str, kind: str, limit: int) -> list[dict]:
         else:
             artist = row.get("artist") or {}
             album = row.get("album") or {}
-            results.append({"kind": "Tracks", "provider": "Deezer", "title": row.get("title") or "Unknown title",
+            title = row.get("title") or "Unknown title"
+            results.append({"kind": "Tracks", "provider": "Deezer", "title": title,
                 "artist": artist.get("name") or "Unknown artist", "album": album.get("title") or "",
-                "duration": row.get("duration"), "cover": album.get("cover_medium") or album.get("cover") or "",
+                "duration": row.get("duration"),
+                "cover": album.get("cover_medium") or album.get("cover") or "",
                 "url": row.get("link") or "", "preview": row.get("preview") or "",
-                "query": f"{artist.get('name', '')} - {row.get('title', '')}".strip(" -")})
+                "query": f"{artist.get('name', '')} - {title}".strip(" -")})
     return results
-
 
 def _search_apple(query: str, limit: int, kind: str = "Tracks") -> list[dict]:
     entity = {"Artists": "musicArtist", "Albums": "album"}.get(kind, "song")
@@ -302,77 +384,141 @@ def _search_spotify(query: str, limit: int, kind: str = "All") -> list[dict]:
     return results
 
 
-def search_catalog(query: str, provider: str = "All", limit: int = 20, kind: str = "All", sort: bool = True) -> list[dict]:
-    """Search catalog APIs plus yt-dlp-compatible YouTube Music and SoundCloud search.
+def search_catalog(
+    query: str,
+    provider: str = "All",
+    limit: int = 20,
+    kind: str = "All",
+    sort: bool = True,
+    progress_callback=None,
+) -> list[dict]:
+    """Search selected catalogues with one bounded worker pool.
 
-    Spotify is added to aggregate searches only when official app credentials
-    are configured through environment variables.
+    For an All search, each provider is queried only for the object types it
+    supports. Progress snapshots contain all rows fetched so far, and provider
+    interleaving prevents one catalogue from monopolising the results.
     """
     query = str(query or "").strip()
     if not query:
         return []
     kind = kind if kind in {"All", "Tracks", "Artists", "Albums", "Playlists"} else "All"
-    provider = {"YouTube": "YouTube Music"}.get(provider, provider)
+    provider = {"YouTube": "YouTube Music", "All catalogs": "All"}.get(provider, provider)
     if provider in {"All", "All catalogs"}:
         providers = ["Deezer", "Apple Music", "YouTube Music", "SoundCloud"]
         if _spotify_credentials_available():
             providers.append("Spotify")
     else:
         providers = [provider]
-    if "Spotify" in providers and not _spotify_credentials_available():
-        if provider == "Spotify":
-            raise RuntimeError(
-                "Spotify catalog search requires UMS_SPOTIFY_CLIENT_ID and "
-                "UMS_SPOTIFY_CLIENT_SECRET. Configure an official Spotify developer app to enable it."
-            )
-        providers.remove("Spotify")
 
-    if kind in {"Artists", "Albums"}:
-        providers = [name for name in providers if name in {"Deezer", "Apple Music", "Spotify"}]
-    elif kind == "Playlists":
-        providers = [name for name in providers if name in {"Deezer", "Spotify"}]
+    allowed = {
+        "Deezer": {"Tracks", "Artists", "Albums", "Playlists"},
+        "Apple Music": {"Tracks", "Artists", "Albums"},
+        "YouTube Music": {"Tracks"},
+        "SoundCloud": {"Tracks"},
+        "Spotify": {"Tracks", "Artists", "Albums", "Playlists"},
+    }
+    providers = [name for name in providers if name in allowed]
+    if provider == "Spotify" and not _spotify_credentials_available():
+        raise RuntimeError(
+            "Spotify catalog search requires UMS_SPOTIFY_CLIENT_ID and "
+            "UMS_SPOTIFY_CLIENT_SECRET. Configure an official Spotify developer app to enable it."
+        )
 
+    kinds = ["Tracks", "Artists", "Albums", "Playlists"] if kind == "All" else [kind]
+    per_kind_limit = {
+        "Tracks": 60 if kind == "All" else max(1, int(limit)),
+        "Artists": 30 if kind == "All" else max(1, int(limit)),
+        "Albums": 30 if kind == "All" else max(1, int(limit)),
+        "Playlists": 30 if kind == "All" else max(1, int(limit)),
+    }
     jobs = []
-    if "Deezer" in providers:
-        jobs.append(("Deezer", lambda: _search_deezer(query, kind, limit)))
-    if "Apple Music" in providers and kind in {"All", "Tracks", "Artists", "Albums"}:
-        jobs.append(("Apple Music", lambda: _search_apple(query, limit, kind)))
-    if "YouTube Music" in providers and kind in {"All", "Tracks"}:
-        jobs.append(("YouTube Music", lambda: _search_ytdlp("YouTube Music", "ytsearch", query, limit)))
-    if "SoundCloud" in providers and kind in {"All", "Tracks"}:
-        jobs.append(("SoundCloud", lambda: _search_ytdlp("SoundCloud", "scsearch", query, limit)))
-    if "Spotify" in providers:
-        jobs.append(("Spotify", lambda: _search_spotify(query, limit, kind)))
+    for source in providers:
+        supported_kinds = [value for value in kinds if value in allowed[source]]
+        if source == "Spotify" and kind == "All":
+            # One Spotify request can return all four object types.
+            jobs.append((source, "All", lambda: _search_spotify(query, 10, "All")))
+            continue
+        for requested_kind in supported_kinds:
+            result_limit = per_kind_limit[requested_kind]
+            if source == "Deezer":
+                fn = lambda requested_kind=requested_kind, result_limit=result_limit: _search_deezer(
+                    query, requested_kind, result_limit
+                )
+            elif source == "Apple Music":
+                fn = lambda requested_kind=requested_kind, result_limit=result_limit: _search_apple(
+                    query, result_limit, requested_kind
+                )
+            elif source == "YouTube Music":
+                fn = lambda result_limit=result_limit: _search_ytdlp(
+                    "YouTube Music", "ytsearch", query, result_limit
+                )
+            elif source == "SoundCloud":
+                fn = lambda result_limit=result_limit: _search_ytdlp(
+                    "SoundCloud", "scsearch", query, result_limit
+                )
+            else:
+                fn = lambda requested_kind=requested_kind, result_limit=result_limit: _search_spotify(
+                    query, min(result_limit, 10), requested_kind
+                )
+            jobs.append((source, requested_kind, fn))
 
-    results: list[dict] = []
-    errors: list[str] = []
+    rows_by_provider_kind: dict[tuple[str, str], list[dict]] = {}
+    errors = []
     if jobs:
-        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-            futures = [(label, pool.submit(fn)) for label, fn in jobs]
-            for label, future in futures:
+        with ThreadPoolExecutor(max_workers=min(6, len(jobs))) as pool:
+            futures = {
+                pool.submit(fn): (source, requested_kind)
+                for source, requested_kind, fn in jobs
+            }
+            for future in as_completed(futures):
+                source, requested_kind = futures[future]
                 try:
-                    results.extend(future.result())
+                    rows = future.result()
+                    if requested_kind == "All":
+                        for row in rows:
+                            row_kind = row.get("kind") or "Tracks"
+                            rows_by_provider_kind.setdefault((source, row_kind), []).append(row)
+                    else:
+                        rows_by_provider_kind.setdefault((source, requested_kind), []).extend(rows)
                 except Exception as exc:
-                    errors.append(f"{label}: {exc}")
+                    errors.append(f"{source} ({requested_kind}): {exc}")
+
+                if progress_callback:
+                    snapshot = []
+                    for partial_kind in kinds:
+                        for partial_provider in providers:
+                            snapshot.extend(rows_by_provider_kind.get((partial_provider, partial_kind), []))
+                    try:
+                        progress_callback(snapshot)
+                    except RuntimeError:
+                        # The receiving Qt object may already be shutting down.
+                        pass
+
+    def _interleave(partial_kind: str) -> list[dict]:
+        provider_rows = {}
+        for source in providers:
+            rows = list(rows_by_provider_kind.get((source, partial_kind), []))
+            if sort:
+                rows.sort(key=lambda row: (
+                    str(row.get("title", "")).casefold(),
+                    str(row.get("artist", "")).casefold(),
+                ))
+            provider_rows[source] = rows
+        combined = []
+        max_rows = max((len(rows) for rows in provider_rows.values()), default=0)
+        for index in range(max_rows):
+            for source in providers:
+                source_rows = provider_rows.get(source, [])
+                if index < len(source_rows):
+                    combined.append(source_rows[index])
+        return combined[:per_kind_limit[partial_kind]]
+
+    results = []
+    for result_kind in kinds:
+        results.extend(_interleave(result_kind))
     if not results and errors:
         raise RuntimeError("Music search providers were unavailable. " + " | ".join(errors[:3]))
-    # Interleave providers before applying the overall cap. This prevents
-    # early providers (for example Deezer) from filling the whole page and
-    # hiding later sources such as SoundCloud or Spotify.
-    provider_rows: dict[str, list[dict]] = {}
-    for source in providers:
-        rows = [row for row in results if row.get("provider") == source]
-        if sort:
-            rows.sort(key=lambda row: (row.get("title", "").casefold(), row.get("artist", "").casefold()))
-        provider_rows[source] = rows
-    combined: list[dict] = []
-    max_rows = max((len(rows) for rows in provider_rows.values()), default=0)
-    for index in range(max_rows):
-        for source in providers:
-            rows = provider_rows.get(source, [])
-            if index < len(rows):
-                combined.append(rows[index])
-    return combined[:max(1, limit)]
+    return results
 
 
 def _lyrics_json(url: str, timeout: int = 16) -> dict:
@@ -711,36 +857,19 @@ class CatalogSearchWorker(QThread):
 
     def __init__(self, query: str, provider: str = "All", kind: str = "All", parent=None):
         super().__init__(parent)
-        self.query = query
-        self.provider = provider
-        self.kind = kind
+        self.query = str(query or "").strip()
+        self.provider = str(provider or "All")
+        self.kind = str(kind or "All")
 
     def run(self):
         try:
-            if self.kind != "All":
-                self.completed.emit(search_catalog(self.query, self.provider, kind=self.kind))
-                return
-            stages = [("Tracks", 60)]
-            if self.provider in {"All", "All catalogs", "Deezer", "Apple Music", "Spotify"}:
-                stages += [("Artists", 30), ("Albums", 30), ("Playlists", 30)]
-            by_stage: dict[int, list[dict]] = {}
-            errors: list[str] = []
-            # Stages are independent HTTP calls: fetch them in parallel, but show
-            # rows in stage order (Tracks, Artists, Albums, Playlists) as they arrive.
-            with ThreadPoolExecutor(max_workers=len(stages)) as pool:
-                futures = {
-                    pool.submit(search_catalog, self.query, self.provider, limit=limit, kind=kind, sort=False): index
-                    for index, (kind, limit) in enumerate(stages)
-                }
-                for future in as_completed(futures):
-                    try:
-                        by_stage[futures[future]] = future.result()
-                        self.progress.emit([row for key in sorted(by_stage) for row in by_stage[key]])
-                    except Exception as exc:
-                        errors.append(str(exc))
-            rows = [row for key in sorted(by_stage) for row in by_stage[key]]
-            if not rows and errors:
-                raise RuntimeError(errors[0])
+            rows = search_catalog(
+                self.query,
+                self.provider,
+                kind=self.kind,
+                sort=False,
+                progress_callback=self.progress.emit,
+            )
             self.completed.emit(rows)
         except Exception as exc:
             self.failed.emit(f"Music search failed: {exc}")
