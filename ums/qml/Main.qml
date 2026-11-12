@@ -74,6 +74,9 @@ ApplicationWindow {
     property var recentSearches: (settingsData && settingsData.recent_searches) ? settingsData.recent_searches : []
     property string searchQuery: ""
     property string searchKind: "All"
+    property string searchProvider: "All catalogs"
+    property var searchHistory: []
+    property int searchHistoryIndex: -1
     property string spotifyUrl: ""
     property string presetName: "Best Available Quality"
     property string conversionPresetName: "Balanced Quality and Size"
@@ -103,6 +106,18 @@ ApplicationWindow {
     property bool lyricsTimed: false
     property bool lyricsSynchronized: false
     property var lyricsLines: []
+
+    ComboBox {
+        id: providerBox
+        visible: false
+        model: ["All catalogs", "Deezer", "Apple Music", "YouTube Music", "SoundCloud", "Spotify"]
+        onCurrentIndexChanged: window.searchProvider = currentText
+    }
+    onSearchProviderChanged: {
+        var providerIndex = providerBox.find(searchProvider)
+        if (providerIndex >= 0 && providerBox.currentIndex !== providerIndex)
+            providerBox.currentIndex = providerIndex
+    }
 
     function formatMediaDuration(value) {
         if (value === null || value === undefined || value === "") return "—"
@@ -192,7 +207,7 @@ ApplicationWindow {
     function providerColor(p) {
         if (p === "Deezer") return "#a238ff"
         if (p === "Apple Music") return "#fa4a5e"
-        if (p === "YouTube") return "#ff3b30"
+        if (p === "YouTube" || p === "YouTube Music") return "#ff3b30"
         if (p === "SoundCloud") return "#ff7a00"
         return themeColors.lime
     }
@@ -212,6 +227,10 @@ ApplicationWindow {
     }
     function openResult(row) {
         var kind = row.kind || "Tracks"
+        if (kind !== "Tracks" && row.provider !== "Deezer") {
+            if (row.url) bridge.openCatalogUrl(row.url)
+            return
+        }
         detailData = { kind: kind, title: row.title, subtitle: row.artist, cover: row.cover || "", url: row.url || "", tracks: kind === "Tracks" ? [row] : [] }
         detailLoading = kind !== "Tracks"
         if (kind !== "Tracks") bridge.openCollection(kind, row.url || "")
@@ -292,6 +311,20 @@ ApplicationWindow {
         if (window.visibility === Window.Maximized) window.showNormal()
         else window.showMaximized()
     }
+    function updateSearchHistorySnapshot() {
+        if (searchHistoryIndex < 0 || searchHistoryIndex >= searchHistory.length)
+            return
+        var next = searchHistory.slice()
+        next[searchHistoryIndex] = {
+            query: searchQuery, provider: searchProvider, tab: searchTab,
+            results: searchItems.slice()
+        }
+        searchHistory = next
+    }
+    function setSearchTab(value) {
+        searchTab = value
+        updateSearchHistorySnapshot()
+    }
     function runSearch(text, provider) {
         text = (text || "").trim()
         if (!text.length) return
@@ -301,6 +334,17 @@ ApplicationWindow {
             bridge.enqueueSpotify(text)
             return
         }
+        searchProvider = provider || searchProvider || "All catalogs"
+        var selectedProviderIndex = providerBox.find(searchProvider)
+        if (selectedProviderIndex >= 0)
+            providerBox.currentIndex = selectedProviderIndex
+        searchHistory = searchHistory.slice(0, searchHistoryIndex + 1)
+        if (!searchHistory.length || (searchHistory[searchHistory.length - 1].query || "") !== "")
+            searchHistory.push({ query: "", provider: "All catalogs", tab: "All", results: [], home: true })
+        searchHistory.push({ query: text, provider: searchProvider, tab: "All", results: [] })
+        if (searchHistory.length > 30)
+            searchHistory.shift()
+        searchHistoryIndex = searchHistory.length - 1
         searchQuery = text
         searchKind = "All"
         searchTab = "All"
@@ -308,8 +352,58 @@ ApplicationWindow {
         detailLoading = false
         searchItems = []
         searchBusy = true
-        bridge.searchMusic(text, provider || "All catalogs", "All")
         setPage("Discover")
+        bridge.searchMusic(text, searchProvider, "All")
+    }
+    function restoreSearchHistory(index) {
+        if (index < 0 || index >= searchHistory.length)
+            return
+        var entry = searchHistory[index]
+        searchHistoryIndex = index
+        searchQuery = entry.query || ""
+        searchProvider = entry.provider || "All catalogs"
+        var selectedProviderIndex = providerBox.find(searchProvider)
+        if (selectedProviderIndex >= 0)
+            providerBox.currentIndex = selectedProviderIndex
+        searchTab = entry.tab || "All"
+        searchItems = (entry.results || []).slice()
+        detailData = null
+        detailLoading = false
+        searchBusy = false
+        setPage("Discover")
+        if (!searchItems.length && searchQuery.length) {
+            searchBusy = true
+            bridge.searchMusic(searchQuery, searchProvider, "All")
+        }
+    }
+    function goSearchBack() { restoreSearchHistory(searchHistoryIndex - 1) }
+    function goSearchForward() { restoreSearchHistory(searchHistoryIndex + 1) }
+    function showDiscoverHome() {
+        var currentIsHome = searchQuery.length === 0 && searchItems.length === 0 && detailData === null
+        if (!currentIsHome) {
+            searchHistory = searchHistory.slice(0, searchHistoryIndex + 1)
+            searchHistory.push({ query: "", provider: "All catalogs", tab: "All", results: [], home: true })
+            if (searchHistory.length > 30)
+                searchHistory.shift()
+            searchHistoryIndex = searchHistory.length - 1
+        }
+        searchQuery = ""
+        searchProvider = "All catalogs"
+        searchKind = "All"
+        searchTab = "All"
+        searchItems = []
+        searchBusy = false
+        detailData = null
+        detailLoading = false
+        providerBox.currentIndex = 0
+        setPage("Discover")
+    }
+    function repeatSearch() {
+        if (!searchQuery.length || searchBusy)
+            return
+        searchItems = []
+        searchBusy = true
+        bridge.searchMusic(searchQuery, searchProvider, "All")
     }
     function formatDuration(seconds) {
         if (!seconds || seconds < 0) return "—"
@@ -351,8 +445,14 @@ ApplicationWindow {
         }
         function onPresetsChanged(value) { presets = JSON.parse(value) }
         function onSettingsChanged(value) { settingsData = JSON.parse(value) }
-        function onSearchResults(value) { searchItems = JSON.parse(value) }
-        function onSearchFinished() { searchBusy = false }
+        function onSearchResults(value) {
+            searchItems = JSON.parse(value)
+            window.updateSearchHistorySnapshot()
+        }
+        function onSearchFinished() {
+            searchBusy = false
+            window.updateSearchHistorySnapshot()
+        }
         function onCollectionReady(value) {
             detailLoading = false
             if (!value) { detailData = null; return }
@@ -518,7 +618,7 @@ ApplicationWindow {
                     { icon: "close", action: "close" }
                 ]
                 delegate: Rectangle {
-                    width: 46; height: titleBar.height
+                    width: 52; height: titleBar.height
                     color: ctrlMouse.containsMouse ? (modelData.action === "close" ? "#c42b1c" : themeColors.panel2) : "transparent"
                     Icon {
                         anchors.centerIn: parent
@@ -529,7 +629,10 @@ ApplicationWindow {
                     MouseArea {
                         id: ctrlMouse
                         anchors.fill: parent
+                        z: 2
+                        acceptedButtons: Qt.LeftButton
                         hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             if (modelData.action === "min") window.showMinimized()
                             else if (modelData.action === "max") window.toggleMaximize()
@@ -595,6 +698,54 @@ ApplicationWindow {
         context: Qt.WindowShortcut
         enabled: window.hasTrack && !window.keyboardTextEntryActive
         onActivated: bridge.setVolume(Math.max(0.0, window.playerVolume - 0.05))
+    }
+    Shortcut {
+        sequence: "Alt+Left"
+        context: Qt.WindowShortcut
+        enabled: window.page === "Discover" && window.searchHistoryIndex > 0 && !window.keyboardTextEntryActive && !window.searchBusy
+        onActivated: window.goSearchBack()
+    }
+    Shortcut {
+        sequence: "Alt+Right"
+        context: Qt.WindowShortcut
+        enabled: window.page === "Discover" && window.searchHistoryIndex >= 0
+                 && window.searchHistoryIndex < window.searchHistory.length - 1 && !window.keyboardTextEntryActive && !window.searchBusy
+        onActivated: window.goSearchForward()
+    }
+    Shortcut {
+        sequence: "Ctrl+R"
+        context: Qt.WindowShortcut
+        enabled: window.page === "Discover" && window.searchQuery.length > 0 && !window.searchBusy && !window.keyboardTextEntryActive
+        onActivated: window.repeatSearch()
+    }
+    Shortcut {
+        sequence: "Ctrl+Shift+H"
+        context: Qt.WindowShortcut
+        enabled: !window.keyboardTextEntryActive && !window.searchBusy
+        onActivated: window.showDiscoverHome()
+    }
+    Shortcut {
+        sequence: "Escape"
+        context: Qt.WindowShortcut
+        enabled: window.page === "Discover" && window.detailData !== null && !window.keyboardTextEntryActive
+        onActivated: { window.detailData = null; window.detailLoading = false }
+    }
+    Shortcut { sequence: "Ctrl+1"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Discover") }
+    Shortcut { sequence: "Ctrl+2"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Downloader") }
+    Shortcut { sequence: "Ctrl+3"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Downloads") }
+    Shortcut { sequence: "Ctrl+4"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Library") }
+    Shortcut { sequence: "Ctrl+5"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Playlists") }
+    Shortcut { sequence: "Ctrl+6"; context: Qt.WindowShortcut; enabled: !window.keyboardTextEntryActive; onActivated: window.setPage("Converter") }
+    Shortcut {
+        sequence: "Ctrl+O"
+        context: Qt.WindowShortcut
+        enabled: !window.keyboardTextEntryActive
+        onActivated: bridge.openOutputFolder()
+    }
+    Shortcut {
+        sequence: "F11"
+        context: Qt.WindowShortcut
+        onActivated: window.toggleMaximize()
     }
 
     // Edge grips so the frameless window can still be resized.
@@ -712,13 +863,15 @@ ApplicationWindow {
         implicitHeight: 36
         implicitWidth: 176
         font.pixelSize: 12
+        hoverEnabled: true
         background: Rectangle {
             radius: 9
             color: window.themeColors.bg
             border.color: cb.popup.visible || cb.hovered ? window.themeColors.borderHi : window.themeColors.border
         }
         contentItem: Text {
-            leftPadding: 12; rightPadding: 30
+            leftPadding: 12
+            rightPadding: 34
             text: cb.displayText
             color: window.themeColors.text
             font.pixelSize: 12
@@ -731,40 +884,79 @@ ApplicationWindow {
             y: (cb.height - height) / 2
             name: cb.popup.visible ? "chevron-up" : "chevron-down"
             color: window.themeColors.muted
-            implicitWidth: 14; implicitHeight: 14
+            implicitWidth: 14
+            implicitHeight: 14
         }
         delegate: ItemDelegate {
+            id: comboOption
+            required property int index
             width: cb.width - 8
-            height: 34
+            height: 36
             padding: 0
+            hoverEnabled: true
             contentItem: RowLayout {
                 spacing: 6
                 Text {
                     Layout.fillWidth: true
                     leftPadding: 10
-                    text: cb.textAt(index)
-                    color: cb.currentIndex === index ? window.themeColors.lime : window.themeColors.text
+                    text: cb.textAt(comboOption.index)
+                    color: cb.currentIndex === comboOption.index ? window.themeColors.lime : window.themeColors.text
                     font.pixelSize: 12
-                    font.weight: cb.currentIndex === index ? Font.Bold : Font.Medium
+                    font.weight: cb.currentIndex === comboOption.index ? Font.Bold : Font.Medium
                     elide: Text.ElideRight
                 }
-                Icon { visible: cb.currentIndex === index; name: "check"; color: window.themeColors.lime; implicitWidth: 14; implicitHeight: 14; Layout.rightMargin: 10 }
+                Icon {
+                    visible: cb.currentIndex === comboOption.index
+                    name: "check"
+                    color: window.themeColors.lime
+                    implicitWidth: 14
+                    implicitHeight: 14
+                    Layout.rightMargin: 10
+                }
             }
-            background: Rectangle { radius: 7; color: parent.hovered ? window.themeColors.panel2 : "transparent" }
+            background: Rectangle {
+                radius: 7
+                color: rowHitArea.containsMouse ? window.themeColors.panel2 : "transparent"
+            }
+            // Put a real click surface above the delegate's visual children.
+            // This makes every pixel of the option row select the same item.
+            MouseArea {
+                id: rowHitArea
+                anchors.fill: parent
+                z: 10
+                enabled: cb.enabled
+                acceptedButtons: Qt.LeftButton
+                hoverEnabled: true
+                preventStealing: false
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    var selected = comboOption.index
+                    cb.currentIndex = selected
+                    cb.highlightedIndex = selected
+                    cb.activated(selected)
+                    cb.popup.close()
+                }
+            }
         }
         popup: Popup {
             y: cb.height + 4
             width: cb.width
             padding: 4
-            implicitHeight: Math.min(contentItem.implicitHeight + 8, 280)
+            implicitHeight: Math.min(optionList.contentHeight + 8, 280)
             contentItem: ListView {
+                id: optionList
                 clip: true
                 implicitHeight: contentHeight
                 model: cb.popup.visible ? cb.delegateModel : null
                 currentIndex: cb.highlightedIndex
+                boundsBehavior: Flickable.StopAtBounds
                 ScrollIndicator.vertical: ScrollIndicator {}
             }
-            background: Rectangle { radius: 10; color: window.themeColors.panel; border.color: window.themeColors.borderHi }
+            background: Rectangle {
+                radius: 10
+                color: window.themeColors.panel
+                border.color: window.themeColors.borderHi
+            }
         }
     }
 
@@ -950,8 +1142,8 @@ ApplicationWindow {
                         ]
                         delegate: Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 40
-                            radius: 9
+                            Layout.preferredHeight: 46
+                            radius: 10
                             readonly property bool current: page === modelData.name
                             color: current ? themeColors.activeBg : navMouse.containsMouse ? themeColors.hover : "transparent"
                             border.color: current ? themeColors.borderHi : "transparent"
@@ -978,7 +1170,19 @@ ApplicationWindow {
                                     Text { id: badgeText; anchors.centerIn: parent; text: parent.pending; color: themeColors.muted; font.pixelSize: 10; font.weight: Font.DemiBold }
                                 }
                             }
-                            MouseArea { id: navMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: setPage(modelData.name) }
+                            MouseArea {
+                                id: navMouse
+                                anchors.fill: parent
+                                z: 5
+                                acceptedButtons: Qt.LeftButton
+                                preventStealing: true
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (window.page !== modelData.name)
+                                        window.setPage(modelData.name)
+                                }
+                            }
                             Behavior on color { ColorAnimation { duration: 160 } }
                         }
                     }
@@ -1210,6 +1414,51 @@ ApplicationWindow {
                 anchors.horizontalCenter: parent.horizontalCenter
                 spacing: 22
                 Item { Layout.preferredHeight: 14 }
+                RowLayout {
+                    visible: discoverFlick.idleState && searchHistory.length > 0
+                    Layout.fillWidth: true
+                    spacing: 8
+                    Rectangle {
+                        Layout.preferredWidth: 32; Layout.preferredHeight: 32
+                        radius: 9
+                        color: idleBackMouse.containsMouse ? themeColors.panel2 : themeColors.panel
+                        border.color: themeColors.border
+                        opacity: searchHistoryIndex > 0 && !searchBusy ? 1 : 0.38
+                        Icon { anchors.centerIn: parent; name: "arrow-left"; color: themeColors.text; implicitWidth: 14; implicitHeight: 14 }
+                        MouseArea {
+                            id: idleBackMouse
+                            anchors.fill: parent; hoverEnabled: true
+                            enabled: searchHistoryIndex > 0 && !searchBusy
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: window.goSearchBack()
+                        }
+                    }
+                    Rectangle {
+                        Layout.preferredWidth: 32; Layout.preferredHeight: 32
+                        radius: 9
+                        color: idleForwardMouse.containsMouse ? themeColors.panel2 : themeColors.panel
+                        border.color: themeColors.border
+                        opacity: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1 && !searchBusy ? 1 : 0.38
+                        Icon { anchors.centerIn: parent; name: "arrow-right"; color: themeColors.text; implicitWidth: 14; implicitHeight: 14 }
+                        MouseArea {
+                            id: idleForwardMouse
+                            anchors.fill: parent; hoverEnabled: true
+                            enabled: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1 && !searchBusy
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: window.goSearchForward()
+                        }
+                    }
+                    Rectangle {
+                        Layout.preferredWidth: 32; Layout.preferredHeight: 32
+                        radius: 9
+                        color: themeColors.activeBg
+                        border.color: themeColors.borderHi
+                        opacity: 0.85
+                        Text { anchors.centerIn: parent; text: "⌂"; color: themeColors.lime; font.pixelSize: 18; font.weight: Font.DemiBold }
+                    }
+                    Text { text: "Discover home"; color: themeColors.muted; font.pixelSize: 11; font.weight: Font.Medium }
+                    Item { Layout.fillWidth: true }
+                }
 
                 // Search bar
                 Rectangle {
@@ -1246,7 +1495,7 @@ ApplicationWindow {
                             }
                             onAccepted: submit()
                         }
-                        ComboBox { id: providerBox; visible: false; model: ["All catalogs","Deezer","Apple Music","YouTube","SoundCloud"] }
+                        
                         Rectangle {
                             Layout.preferredHeight: 40
                             Layout.preferredWidth: searchBtnRow.implicitWidth + 34
@@ -1273,7 +1522,7 @@ ApplicationWindow {
                     spacing: 8
                     Repeater {
                         model: [
-                            {label: "Spotify", idx: -1}, {label: "YouTube Music", idx: 3}, {label: "SoundCloud", idx: 4},
+                            {label: "Spotify", idx: 5}, {label: "YouTube Music", idx: 3}, {label: "SoundCloud", idx: 4},
                             {label: "Deezer", idx: 1}, {label: "Apple Music", idx: 2}
                         ]
                         delegate: Rectangle {
@@ -1291,8 +1540,8 @@ ApplicationWindow {
                             MouseArea {
                                 anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                                 onClicked: {
-                                    if (modelData.idx < 0) { toast.showMessage("Paste a Spotify track, album or playlist link into the search box."); return }
                                     providerBox.currentIndex = providerBox.currentIndex === modelData.idx ? 0 : modelData.idx
+                                    searchProvider = providerBox.currentText
                                 }
                             }
                         }
@@ -1451,6 +1700,32 @@ ApplicationWindow {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 6
+                                Rectangle {
+                                    Layout.preferredWidth: 30; Layout.preferredHeight: 30
+                                    radius: 9
+                                    color: backSearchMouse.containsMouse ? themeColors.panel2 : themeColors.panel3
+                                    border.color: themeColors.border
+                                    opacity: searchHistoryIndex > 0 ? 1 : 0.38
+                                    Icon { anchors.centerIn: parent; name: "arrow-left"; color: themeColors.text; implicitWidth: 14; implicitHeight: 14 }
+                                    MouseArea { id: backSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: searchHistoryIndex > 0 && !searchBusy; cursorShape: Qt.PointingHandCursor; onClicked: window.goSearchBack() }
+                                }
+                                Rectangle {
+                                    Layout.preferredWidth: 30; Layout.preferredHeight: 30
+                                    radius: 9
+                                    color: forwardSearchMouse.containsMouse ? themeColors.panel2 : themeColors.panel3
+                                    border.color: themeColors.border
+                                    opacity: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1 ? 1 : 0.38
+                                    Icon { anchors.centerIn: parent; name: "arrow-right"; color: themeColors.text; implicitWidth: 14; implicitHeight: 14 }
+                                    MouseArea { id: forwardSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: searchHistoryIndex >= 0 && searchHistoryIndex < searchHistory.length - 1 && !searchBusy; cursorShape: Qt.PointingHandCursor; onClicked: window.goSearchForward() }
+                                }
+                                Rectangle {
+                                    Layout.preferredWidth: 30; Layout.preferredHeight: 30
+                                    radius: 9
+                                    color: homeSearchMouse.containsMouse ? themeColors.panel2 : themeColors.panel3
+                                    border.color: themeColors.border
+                                    Text { anchors.centerIn: parent; text: "⌂"; color: themeColors.lime; font.pixelSize: 18; font.weight: Font.DemiBold }
+                                    MouseArea { id: homeSearchMouse; anchors.fill: parent; hoverEnabled: true; enabled: !searchBusy; cursorShape: Qt.PointingHandCursor; onClicked: window.showDiscoverHome() }
+                                }
                                 Text { text: "Results for"; color: themeColors.text; font.pixelSize: 16; font.weight: Font.Bold }
                                 Text { Layout.maximumWidth: 420; text: searchQuery; color: themeColors.lime; font.pixelSize: 16; font.weight: Font.Bold; elide: Text.ElideRight }
                                 Item { Layout.fillWidth: true }
@@ -1473,13 +1748,119 @@ ApplicationWindow {
                                             Text { text: modelData; color: on ? "#14190b" : themeColors.text; font.pixelSize: 12; font.weight: Font.DemiBold }
                                             Text { text: n; color: on ? "#14190b" : themeColors.subtle; font.pixelSize: 11; opacity: on ? 0.75 : 1 }
                                         }
-                                        MouseArea { id: tabMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: searchTab = modelData }
+                                        MouseArea { id: tabMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: window.setSearchTab(modelData) }
                                     }
                                 }
                             }
                         }
                         Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: themeColors.border }
+                        GridLayout {
+                            id: artistResultsGrid
+                            visible: searchTab === "Artists"
+                            Layout.fillWidth: true
+                            Layout.margins: 14
+                            columns: Math.max(2, Math.floor(width / 180))
+                            columnSpacing: 12
+                            rowSpacing: 12
+                            Repeater {
+                                model: searchItems.filter(function(row) { return (row.kind || "Tracks") === "Artists" })
+                                delegate: Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredWidth: (artistResultsGrid.width - (artistResultsGrid.columns - 1) * artistResultsGrid.columnSpacing) / artistResultsGrid.columns
+                                    Layout.preferredHeight: 190
+                                    radius: 14
+                                    color: artistCardMouse.containsMouse ? themeColors.panel2 : themeColors.panel
+                                    border.color: artistCardMouse.containsMouse ? themeColors.borderHi : themeColors.border
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 13
+                                        spacing: 8
+                                        CoverBox {
+                                            Layout.alignment: Qt.AlignHCenter
+                                            source: modelData.cover || ""
+                                            box: 82
+                                            corner: 41
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.title || "Unknown artist"
+                                            color: themeColors.text
+                                            font.pixelSize: 12
+                                            font.weight: Font.Bold
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.album || "Artist"
+                                            color: themeColors.muted
+                                            font.pixelSize: 10
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                        }
+                                        ProviderChip { Layout.alignment: Qt.AlignHCenter; provider: modelData.provider || "" }
+                                    }
+                                    MouseArea { id: artistCardMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: window.openResult(modelData) }
+                                }
+                            }
+                        }
+                        GridLayout {
+                            id: albumResultsGrid
+                            visible: searchTab === "Albums"
+                            Layout.fillWidth: true
+                            Layout.margins: 14
+                            columns: Math.max(2, Math.floor(width / 190))
+                            columnSpacing: 12
+                            rowSpacing: 12
+                            Repeater {
+                                model: searchItems.filter(function(row) { return (row.kind || "Tracks") === "Albums" })
+                                delegate: Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredWidth: (albumResultsGrid.width - (albumResultsGrid.columns - 1) * albumResultsGrid.columnSpacing) / albumResultsGrid.columns
+                                    Layout.preferredHeight: 220
+                                    radius: 14
+                                    color: albumCardMouse.containsMouse ? themeColors.panel2 : themeColors.panel
+                                    border.color: albumCardMouse.containsMouse ? themeColors.borderHi : themeColors.border
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 13
+                                        spacing: 7
+                                        CoverBox {
+                                            Layout.alignment: Qt.AlignHCenter
+                                            source: modelData.cover || ""
+                                            box: 112
+                                            corner: 10
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.title || "Unknown album"
+                                            color: themeColors.text
+                                            font.pixelSize: 12
+                                            font.weight: Font.Bold
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                        }
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.artist || "Unknown artist"
+                                            color: themeColors.muted
+                                            font.pixelSize: 10
+                                            horizontalAlignment: Text.AlignHCenter
+                                            elide: Text.ElideRight
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            Layout.alignment: Qt.AlignHCenter
+                                            Text { text: modelData.album || ""; color: themeColors.subtle; font.pixelSize: 9; elide: Text.ElideRight; Layout.maximumWidth: 90 }
+                                            ProviderChip { provider: modelData.provider || "" }
+                                        }
+                                    }
+                                    MouseArea { id: albumCardMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: window.openResult(modelData) }
+                                }
+                            }
+                        }
                         Repeater {
+                            visible: searchTab !== "Artists" && searchTab !== "Albums"
                             model: visibleSearchRows
                             delegate: Item {
                                 Layout.fillWidth: true
@@ -1659,11 +2040,18 @@ ApplicationWindow {
                     palette: window.themeColors
                     presets: window.presets
                     selectedPreset: window.presetName
+                    canDeleteSelectedPreset: bridge.isCustomPreset(window.presetName)
                     onPresetChanged: function(name) { window.presetName = name }
                     onSavePresetRequested: function(optionsJson) {
                         var savedName = bridge.saveCustomPreset(optionsJson)
                         if (savedName)
                             window.presetName = savedName
+                    }
+                    onDeletePresetRequested: function(name) {
+                        if (bridge.deleteCustomPreset(name)) {
+                            if (window.presetName === name) window.presetName = "Best Available Quality"
+                            if (window.conversionPresetName === name) window.conversionPresetName = "Balanced Quality and Size"
+                        }
                     }
                 }
             }
@@ -1999,13 +2387,12 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     Text { text: "Add to"; color: themeColors.subtle; font.pixelSize: 10 }
-                    ComboBox {
+                    StyledCombo {
                         id: libraryPlaylistChoice
                         model: Object.keys(playlistData).length ? Object.keys(playlistData) : ["Favorites"]
-                        implicitWidth: 140; implicitHeight: 28
+                        implicitWidth: 140
+                        implicitHeight: 32
                         font.pixelSize: 11
-                        background: Rectangle { radius: 8; color: themeColors.panel; border.color: themeColors.border }
-                        contentItem: Text { leftPadding: 10; text: libraryPlaylistChoice.displayText; color: themeColors.text; verticalAlignment: Text.AlignVCenter; font.pixelSize: 11; elide: Text.ElideRight }
                     }
                 }
                 ColumnLayout {
@@ -2342,12 +2729,19 @@ ApplicationWindow {
                             palette: window.themeColors
                             presets: window.presets
                             selectedPreset: window.conversionPresetName
+                            canDeleteSelectedPreset: bridge.isCustomPreset(window.conversionPresetName)
                             showSourceQuality: false
                             onPresetChanged: function(name) { window.conversionPresetName = name }
                             onSavePresetRequested: function(optionsJson) {
                                 var savedName = bridge.saveCustomPreset(optionsJson)
                                 if (savedName)
                                     window.conversionPresetName = savedName
+                            }
+                            onDeletePresetRequested: function(name) {
+                                if (bridge.deleteCustomPreset(name)) {
+                                    if (window.presetName === name) window.presetName = "Best Available Quality"
+                                    if (window.conversionPresetName === name) window.conversionPresetName = "Balanced Quality and Size"
+                                }
                             }
                         }
                         Button { text: "Add conversion to queue  →"

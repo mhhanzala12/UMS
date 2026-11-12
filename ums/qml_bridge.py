@@ -419,6 +419,42 @@ class AppBridge(QObject):
         return name
 
     @Slot(str, result=bool)
+    def isCustomPreset(self, name):
+        """Return whether a preset is user-defined and therefore removable."""
+        name = str(name or "").strip()
+        return bool(name and name not in PRESETS
+                    and name in self.settings.get("custom_presets", {}))
+
+    @Slot(str, result=bool)
+    def deleteCustomPreset(self, name):
+        """Permanently remove a user preset after an explicit confirmation."""
+        name = str(name or "").strip()
+        if not name or name in PRESETS:
+            self._notify("Built-in presets are protected and cannot be deleted.")
+            return False
+        custom = self.settings.get("custom_presets", {})
+        if name not in custom:
+            self._notify("That custom preset no longer exists.")
+            return False
+        answer = QMessageBox.question(
+            None,
+            "Delete custom preset?",
+            f"Delete “{name}” permanently? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return False
+        custom = dict(custom)
+        custom.pop(name, None)
+        self.settings["custom_presets"] = custom
+        self._persist()
+        self.presets = merged_presets(custom)
+        self.presetsChanged.emit(json.dumps(self.presets, ensure_ascii=False))
+        self._notify(f"Deleted custom preset: {name}")
+        return True
+
+    @Slot(str, result=bool)
     def enqueueSpotify(self, url):
         url = str(url).strip()
         if self.spotify_worker and self.spotify_worker.isRunning():
@@ -462,6 +498,7 @@ class AppBridge(QObject):
         provider = "All" if provider in ("All catalogs", "All") else provider
         self.search_worker = CatalogSearchWorker(query, provider, kind, self)
         self.search_worker.progress.connect(lambda rows: self.searchResults.emit(json.dumps(rows)))
+        self.search_worker.warning.connect(lambda message: self._notify("Catalog warning: " + message))
         self.search_worker.completed.connect(self._search_done)
         self.search_worker.failed.connect(self._search_failed)
         self.search_worker.finished.connect(self._cleanup_finished_worker)
@@ -1509,7 +1546,30 @@ class AppBridge(QObject):
             else:
                 opener = urllib.request.build_opener()
             with opener.open("https://www.youtube.com/generate_204", timeout=8) as response:
-                return "Connection test passed (HTTP %s)." % response.status
+                youtube_status = response.status
+
+            # Also test the catalogue endpoint users are troubleshooting. The
+            # previous test only checked YouTube, so it could pass while Deezer
+            # was still blocked by the selected network route.
+            deezer_request = urllib.request.Request(
+                "https://api.deezer.com/search/playlist?q=UMS&limit=1",
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "UniversalMediaStudio/1.0 (connection test)",
+                    "Referer": "https://www.deezer.com/",
+                },
+            )
+            with opener.open(deezer_request, timeout=8) as response:
+                payload = json.loads(response.read().decode("utf-8-sig"))
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                api_error = payload.get("error") if isinstance(payload, dict) else None
+                if isinstance(api_error, dict):
+                    raise RuntimeError(
+                        "Deezer API rejected the request: %s" % (api_error.get("message") or api_error)
+                    )
+                raise RuntimeError("Deezer returned an unexpected catalogue response.")
+
+            return "Connection test passed: YouTube HTTP %s and Deezer catalogue API reachable." % youtube_status
 
         worker = FunctionWorker(probe, self)
         worker.done.connect(self._notify)
