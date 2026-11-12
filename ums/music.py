@@ -55,6 +55,21 @@ _JSON_CACHE: dict[str, tuple[float, dict]] = {}
 _JSON_CACHE_LOCK = threading.Lock()
 _JSON_CACHE_TTL = 120.0
 _JSON_CACHE_MAX = 96
+_DEEZER_REQUEST_LOCK = threading.Lock()
+_DEEZER_LAST_REQUEST = 0.0
+_DEEZER_MIN_REQUEST_INTERVAL = 0.20
+
+
+def _throttle_deezer_request(url: str) -> None:
+    """Serialize Deezer calls and avoid triggering its per-IP edge limits."""
+    global _DEEZER_LAST_REQUEST
+    if (urlparse(url).hostname or "").casefold() != "api.deezer.com":
+        return
+    with _DEEZER_REQUEST_LOCK:
+        delay = _DEEZER_MIN_REQUEST_INTERVAL - (time.monotonic() - _DEEZER_LAST_REQUEST)
+        if delay > 0:
+            time.sleep(delay)
+        _DEEZER_LAST_REQUEST = time.monotonic()
 
 
 def _get_json(url: str, *, retries: int = 1) -> dict:
@@ -67,16 +82,23 @@ def _get_json(url: str, *, retries: int = 1) -> dict:
 
     from urllib.error import HTTPError, URLError
 
+    host = (urlparse(url).hostname or "").casefold()
+    is_deezer = host == "api.deezer.com"
     last_error = None
     for attempt in range(max(0, retries) + 1):
-        request = Request(
-            url,
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "UniversalMediaStudio/1.0 (local desktop app)",
-            },
-        )
+        request_headers = {
+            "Accept": "application/json",
+            "User-Agent": "UniversalMediaStudio/1.0 (local desktop app)",
+        }
+        if is_deezer:
+            request_headers.update({
+                "Referer": "https://www.deezer.com/",
+                "Origin": "https://www.deezer.com",
+                "Accept-Language": "en-US,en;q=0.9",
+            })
+        request = Request(url, headers=request_headers)
         try:
+            _throttle_deezer_request(url)
             with urlopen(request, timeout=15) as response:
                 raw = response.read()
             try:
@@ -102,10 +124,20 @@ def _get_json(url: str, *, retries: int = 1) -> dict:
             return data
         except HTTPError as exc:
             body = exc.read(512).decode("utf-8", errors="replace").strip()
-            last_error = RuntimeError(
-                f"HTTP {exc.code} from {exc.url}: {body[:180] or exc.reason}"
+            if is_deezer and exc.code == 403:
+                # Deezer's edge returns an HTML Access Denied page for network/IP
+                # blocks. Keep that noisy HTML out of the UI and application log.
+                last_error = RuntimeError(
+                    "HTTP 403 Access Denied: Deezer rejected this network/IP at its API edge."
+                )
+            else:
+                last_error = RuntimeError(
+                    f"HTTP {exc.code} from {exc.url}: {body[:180] or exc.reason}"
+                )
+            retryable = (
+                exc.code in {408, 425, 429, 500, 502, 503, 504}
+                or (is_deezer and exc.code == 403)
             )
-            retryable = exc.code in {408, 425, 429, 500, 502, 503, 504}
             if not retryable or attempt >= retries:
                 raise last_error from exc
             retry_after = 0.0
@@ -113,7 +145,8 @@ def _get_json(url: str, *, retries: int = 1) -> dict:
                 retry_after = min(2.0, max(0.0, float(exc.headers.get("Retry-After", 0))))
             except (TypeError, ValueError, AttributeError):
                 pass
-            time.sleep(retry_after or (0.35 * (2 ** attempt)))
+            fallback_delay = 1.0 if is_deezer and exc.code == 403 else (0.35 * (2 ** attempt))
+            time.sleep(retry_after or fallback_delay)
         except URLError as exc:
             last_error = RuntimeError(f"Network error contacting {url}: {exc.reason}")
             if attempt >= retries:
@@ -1425,6 +1458,9 @@ def _load_library_cache() -> dict:
                     }
                 return cleaned
             _LOG.warning("Ignoring malformed music library cache entries in %s", LIBRARY_CACHE_FILE)
+    except FileNotFoundError:
+        # No cache is the normal first-run state; scanning will create it.
+        return {}
     except (OSError, ValueError) as exc:
         _LOG.warning("Ignoring unreadable music library cache %s: %s", LIBRARY_CACHE_FILE, exc)
     return {}
