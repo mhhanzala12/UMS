@@ -863,13 +863,15 @@ ApplicationWindow {
         implicitHeight: 36
         implicitWidth: 176
         font.pixelSize: 12
+        hoverEnabled: true
         background: Rectangle {
             radius: 9
             color: window.themeColors.bg
             border.color: cb.popup.visible || cb.hovered ? window.themeColors.borderHi : window.themeColors.border
         }
         contentItem: Text {
-            leftPadding: 12; rightPadding: 30
+            leftPadding: 12
+            rightPadding: 34
             text: cb.displayText
             color: window.themeColors.text
             font.pixelSize: 12
@@ -882,40 +884,77 @@ ApplicationWindow {
             y: (cb.height - height) / 2
             name: cb.popup.visible ? "chevron-up" : "chevron-down"
             color: window.themeColors.muted
-            implicitWidth: 14; implicitHeight: 14
+            implicitWidth: 14
+            implicitHeight: 14
         }
         delegate: ItemDelegate {
+            id: comboOption
+            required property int index
             width: cb.width - 8
-            height: 34
+            height: 36
             padding: 0
+            hoverEnabled: true
             contentItem: RowLayout {
                 spacing: 6
                 Text {
                     Layout.fillWidth: true
                     leftPadding: 10
-                    text: cb.textAt(index)
-                    color: cb.currentIndex === index ? window.themeColors.lime : window.themeColors.text
+                    text: cb.textAt(comboOption.index)
+                    color: cb.currentIndex === comboOption.index ? window.themeColors.lime : window.themeColors.text
                     font.pixelSize: 12
-                    font.weight: cb.currentIndex === index ? Font.Bold : Font.Medium
+                    font.weight: cb.currentIndex === comboOption.index ? Font.Bold : Font.Medium
                     elide: Text.ElideRight
                 }
-                Icon { visible: cb.currentIndex === index; name: "check"; color: window.themeColors.lime; implicitWidth: 14; implicitHeight: 14; Layout.rightMargin: 10 }
+                Icon {
+                    visible: cb.currentIndex === comboOption.index
+                    name: "check"
+                    color: window.themeColors.lime
+                    implicitWidth: 14
+                    implicitHeight: 14
+                    Layout.rightMargin: 10
+                }
             }
-            background: Rectangle { radius: 7; color: parent.hovered ? window.themeColors.panel2 : "transparent" }
+            background: Rectangle {
+                radius: 7
+                color: comboOption.hovered ? window.themeColors.panel2 : "transparent"
+            }
+            // Put a real click surface above the delegate's visual children.
+            // This makes every pixel of the option row select the same item.
+            MouseArea {
+                anchors.fill: parent
+                z: 10
+                acceptedButtons: Qt.LeftButton
+                hoverEnabled: true
+                preventStealing: false
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                    var selected = comboOption.index
+                    cb.currentIndex = selected
+                    cb.highlightedIndex = selected
+                    cb.activated(selected)
+                    cb.popup.close()
+                }
+            }
         }
         popup: Popup {
             y: cb.height + 4
             width: cb.width
             padding: 4
-            implicitHeight: Math.min(contentItem.implicitHeight + 8, 280)
+            implicitHeight: Math.min(optionList.contentHeight + 8, 280)
             contentItem: ListView {
+                id: optionList
                 clip: true
                 implicitHeight: contentHeight
                 model: cb.popup.visible ? cb.delegateModel : null
                 currentIndex: cb.highlightedIndex
+                boundsBehavior: Flickable.StopAtBounds
                 ScrollIndicator.vertical: ScrollIndicator {}
             }
-            background: Rectangle { radius: 10; color: window.themeColors.panel; border.color: window.themeColors.borderHi }
+            background: Rectangle {
+                radius: 10
+                color: window.themeColors.panel
+                border.color: window.themeColors.borderHi
+            }
         }
     }
 
@@ -2346,13 +2385,12 @@ ApplicationWindow {
                     }
                     Item { Layout.fillWidth: true }
                     Text { text: "Add to"; color: themeColors.subtle; font.pixelSize: 10 }
-                    ComboBox {
+                    StyledCombo {
                         id: libraryPlaylistChoice
                         model: Object.keys(playlistData).length ? Object.keys(playlistData) : ["Favorites"]
-                        implicitWidth: 140; implicitHeight: 28
+                        implicitWidth: 140
+                        implicitHeight: 32
                         font.pixelSize: 11
-                        background: Rectangle { radius: 8; color: themeColors.panel; border.color: themeColors.border }
-                        contentItem: Text { leftPadding: 10; text: libraryPlaylistChoice.displayText; color: themeColors.text; verticalAlignment: Text.AlignVCenter; font.pixelSize: 11; elide: Text.ElideRight }
                     }
                 }
                 ColumnLayout {
