@@ -58,15 +58,23 @@ _JSON_CACHE_MAX = 96
 _DEEZER_REQUEST_LOCK = threading.Lock()
 _DEEZER_LAST_REQUEST = 0.0
 _DEEZER_MIN_REQUEST_INTERVAL = 0.20
+_DEEZER_COOLDOWN_UNTIL = 0.0
+_DEEZER_COOLDOWN_SECONDS = 15 * 60
 
 
 def _throttle_deezer_request(url: str) -> None:
-    """Serialize Deezer calls and avoid triggering its per-IP edge limits."""
+    """Pace Deezer calls and pause the provider after a persistent edge-level 403."""
     global _DEEZER_LAST_REQUEST
     if (urlparse(url).hostname or "").casefold() != "api.deezer.com":
         return
     with _DEEZER_REQUEST_LOCK:
-        delay = _DEEZER_MIN_REQUEST_INTERVAL - (time.monotonic() - _DEEZER_LAST_REQUEST)
+        now = time.monotonic()
+        if now < _DEEZER_COOLDOWN_UNTIL:
+            remaining = max(1, int(_DEEZER_COOLDOWN_UNTIL - now))
+            raise RuntimeError(
+                f"Deezer is temporarily paused after an HTTP 403 (retry in about {remaining // 60 + 1} min)."
+            )
+        delay = _DEEZER_MIN_REQUEST_INTERVAL - (now - _DEEZER_LAST_REQUEST)
         if delay > 0:
             time.sleep(delay)
         _DEEZER_LAST_REQUEST = time.monotonic()
@@ -139,6 +147,10 @@ def _get_json(url: str, *, retries: int = 1) -> dict:
                 or (is_deezer and exc.code == 403)
             )
             if not retryable or attempt >= retries:
+                if is_deezer and exc.code == 403:
+                    global _DEEZER_COOLDOWN_UNTIL
+                    with _DEEZER_REQUEST_LOCK:
+                        _DEEZER_COOLDOWN_UNTIL = time.monotonic() + _DEEZER_COOLDOWN_SECONDS
                 raise last_error from exc
             retry_after = 0.0
             try:
@@ -428,6 +440,7 @@ def search_catalog(
     kind: str = "All",
     sort: bool = True,
     progress_callback=None,
+    warning_callback=None,
 ) -> list[dict]:
     """Search selected catalogues with one bounded worker pool.
 
@@ -553,8 +566,35 @@ def search_catalog(
     results = []
     for result_kind in kinds:
         results.extend(_interleave(result_kind))
-    if not results and errors:
-        raise RuntimeError("Music search providers were unavailable. " + " | ".join(errors[:3]))
+
+    if errors:
+        # One blocked source must not turn an All-catalog search into a failure.
+        # Keep one diagnostic per provider instead of dumping every failed type.
+        summaries = []
+        seen_providers = set()
+        for error in errors:
+            source = error.split(" (", 1)[0]
+            if source not in seen_providers:
+                seen_providers.add(source)
+                summaries.append(error)
+
+        if provider not in {"All", "All catalogs"} and not results:
+            raise RuntimeError("Music search provider was unavailable. " + " | ".join(summaries[:3]))
+
+        warning = (
+            "Some music catalogs could not be reached; results from available catalogs "
+            "are still shown. " + " | ".join(summaries[:4])
+        )
+        if not results:
+            warning += " No matches were returned by the reachable catalogs."
+        _LOG.warning("%s", warning)
+        if warning_callback:
+            try:
+                warning_callback(warning)
+            except RuntimeError:
+                # The receiving Qt object may already be shutting down.
+                pass
+
     return results
 
 
@@ -890,6 +930,7 @@ class LyricsSearchWorker(QThread):
 class CatalogSearchWorker(QThread):
     completed = Signal(object)
     progress = Signal(object)
+    warning = Signal(str)
     failed = Signal(str)
 
     def __init__(self, query: str, provider: str = "All", kind: str = "All", parent=None):
@@ -910,6 +951,7 @@ class CatalogSearchWorker(QThread):
                 kind=self.kind,
                 sort=False,
                 progress_callback=self.progress.emit,
+                warning_callback=self.warning.emit,
             )
             self.completed.emit(rows)
         except Exception as exc:
