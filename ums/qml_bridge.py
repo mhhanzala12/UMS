@@ -1546,7 +1546,30 @@ class AppBridge(QObject):
             else:
                 opener = urllib.request.build_opener()
             with opener.open("https://www.youtube.com/generate_204", timeout=8) as response:
-                return "Connection test passed (HTTP %s)." % response.status
+                youtube_status = response.status
+
+            # Also test the catalogue endpoint users are troubleshooting. The
+            # previous test only checked YouTube, so it could pass while Deezer
+            # was still blocked by the selected network route.
+            deezer_request = urllib.request.Request(
+                "https://api.deezer.com/search/playlist?q=UMS&limit=1",
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "UniversalMediaStudio/1.0 (connection test)",
+                    "Referer": "https://www.deezer.com/",
+                },
+            )
+            with opener.open(deezer_request, timeout=8) as response:
+                payload = json.loads(response.read().decode("utf-8-sig"))
+            if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                api_error = payload.get("error") if isinstance(payload, dict) else None
+                if isinstance(api_error, dict):
+                    raise RuntimeError(
+                        "Deezer API rejected the request: %s" % (api_error.get("message") or api_error)
+                    )
+                raise RuntimeError("Deezer returned an unexpected catalogue response.")
+
+            return "Connection test passed: YouTube HTTP %s and Deezer catalogue API reachable." % youtube_status
 
         worker = FunctionWorker(probe, self)
         worker.done.connect(self._notify)
