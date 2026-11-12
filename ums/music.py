@@ -28,8 +28,10 @@ def Request(*args, **kwargs):
 
 
 def urlopen(*args, **kwargs):
-    from urllib.request import urlopen as _urlopen
-    return _urlopen(*args, **kwargs)
+    # Route every music/catalog HTTP request through the same Connection setting
+    # used by yt-dlp. This intentionally avoids changing urllib's global opener.
+    opener, _route_key = _catalog_transport()
+    return opener.open(*args, **kwargs)
 
 
 def url2pathname(path):
@@ -58,21 +60,50 @@ _JSON_CACHE_MAX = 96
 _DEEZER_REQUEST_LOCK = threading.Lock()
 _DEEZER_LAST_REQUEST = 0.0
 _DEEZER_MIN_REQUEST_INTERVAL = 0.20
-_DEEZER_COOLDOWN_UNTIL = 0.0
+_DEEZER_COOLDOWNS: dict[tuple[str, str], float] = {}
 _DEEZER_COOLDOWN_SECONDS = 15 * 60
 
 
-def _throttle_deezer_request(url: str) -> None:
-    """Pace Deezer calls and pause the provider after a persistent edge-level 403."""
+def _catalog_transport():
+    """Build the same direct / system / configured-proxy route used by the app."""
+    from urllib.request import build_opener, ProxyHandler, getproxies
+
+    settings = load_settings()
+    mode = str(settings.get("connection_mode") or "Automatic").strip().casefold()
+    options = network_options(settings)
+
+    if mode == "direct":
+        proxies = {}
+        route_key = ("direct", "")
+    elif mode == "proxy":
+        proxy = str(options.get("proxy") or "").strip()
+        if not proxy:
+            raise RuntimeError("Proxy mode is selected, but no proxy URL is configured.")
+        proxies = {"http": proxy, "https": proxy}
+        route_key = ("proxy", proxy)
+    else:
+        # ProxyHandler() follows OS / environment proxy configuration, as
+        # promised by Automatic mode in the Settings page.
+        proxies = None
+        detected = getproxies()
+        route_key = ("automatic", detected.get("https") or detected.get("http") or "")
+
+    return build_opener(ProxyHandler(proxies)), route_key
+
+
+def _throttle_deezer_request(url: str, route_key: tuple[str, str]) -> None:
+    """Pace Deezer calls and isolate 403 cooldowns to the rejected network route."""
     global _DEEZER_LAST_REQUEST
     if (urlparse(url).hostname or "").casefold() != "api.deezer.com":
         return
     with _DEEZER_REQUEST_LOCK:
         now = time.monotonic()
-        if now < _DEEZER_COOLDOWN_UNTIL:
-            remaining = max(1, int(_DEEZER_COOLDOWN_UNTIL - now))
+        cooldown_until = _DEEZER_COOLDOWNS.get(route_key, 0.0)
+        if now < cooldown_until:
+            remaining = max(1, int(cooldown_until - now))
             raise RuntimeError(
-                f"Deezer is temporarily paused after an HTTP 403 (retry in about {remaining // 60 + 1} min)."
+                f"Deezer is temporarily paused on this connection after an HTTP 403 "
+                f"(retry in about {remaining // 60 + 1} min). Change the connection route to retry sooner."
             )
         delay = _DEEZER_MIN_REQUEST_INTERVAL - (now - _DEEZER_LAST_REQUEST)
         if delay > 0:
@@ -92,6 +123,7 @@ def _get_json(url: str, *, retries: int = 1) -> dict:
 
     host = (urlparse(url).hostname or "").casefold()
     is_deezer = host == "api.deezer.com"
+    opener, route_key = _catalog_transport()
     last_error = None
     for attempt in range(max(0, retries) + 1):
         request_headers = {
@@ -106,8 +138,8 @@ def _get_json(url: str, *, retries: int = 1) -> dict:
             })
         request = Request(url, headers=request_headers)
         try:
-            _throttle_deezer_request(url)
-            with urlopen(request, timeout=15) as response:
+            _throttle_deezer_request(url, route_key)
+            with opener.open(request, timeout=15) as response:
                 raw = response.read()
             try:
                 data = json.loads(raw.decode("utf-8-sig"))
@@ -148,9 +180,16 @@ def _get_json(url: str, *, retries: int = 1) -> dict:
             )
             if not retryable or attempt >= retries:
                 if is_deezer and exc.code == 403:
-                    global _DEEZER_COOLDOWN_UNTIL
                     with _DEEZER_REQUEST_LOCK:
-                        _DEEZER_COOLDOWN_UNTIL = time.monotonic() + _DEEZER_COOLDOWN_SECONDS
+                        _DEEZER_COOLDOWNS[route_key] = time.monotonic() + _DEEZER_COOLDOWN_SECONDS
+                        # Keep cooldown state bounded if the user switches proxies.
+                        if len(_DEEZER_COOLDOWNS) > 16:
+                            expired = [key for key, value in _DEEZER_COOLDOWNS.items()
+                                       if value <= time.monotonic()]
+                            for key in expired:
+                                _DEEZER_COOLDOWNS.pop(key, None)
+                            while len(_DEEZER_COOLDOWNS) > 16:
+                                _DEEZER_COOLDOWNS.pop(next(iter(_DEEZER_COOLDOWNS)))
                 raise last_error from exc
             retry_after = 0.0
             try:
@@ -291,6 +330,9 @@ def _search_ytdlp(source: str, prefix: str, query: str, limit: int) -> list[dict
         raise RuntimeError("yt-dlp is required for YouTube Music and SoundCloud search.") from exc
     opts = {"quiet": True, "no_warnings": True, "skip_download": True, "extract_flat": "in_playlist",
             "ignoreerrors": True, "socket_timeout": 12}
+    transport_options = network_options(load_settings())
+    if "proxy" in transport_options:
+        opts["proxy"] = transport_options["proxy"]
     with yt_dlp.YoutubeDL(opts) as ydl:
         if source == "YouTube Music":
             music_url = "https://music.youtube.com/search?" + urlencode({"q": query}) + "#songs"
