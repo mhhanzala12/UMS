@@ -141,6 +141,7 @@ UniversalMediaStudio/
 ## Troubleshooting
 
 - **yt-dlp missing or YouTube formats unavailable:** run `python -m pip install -U "yt-dlp[default]"` in the project environment and install Deno (or another yt-dlp-supported JavaScript runtime) on PATH. Restart the app. For videos that require sign-in, configure supported browser cookies in yt-dlp; the app does not bypass access controls.
+- **Deezer catalogue search unavailable:** UMS checks Deezer's API error payloads (including quota errors returned with HTTP 200), retries transient failures, and tries the standard track-search route before the typed fallback. An HTTP 403 from Deezer itself can still mean its edge is refusing the current network route; check the detailed error in the app log and retry later or test from another normal network connection. Public catalogue search does not require a Deezer login or app secret.
 - **FFmpeg missing:** install FFmpeg, restart the app, and check Settings → Detected tools.
 - **The app closes or shows no window at startup:** run `run_windows.bat` from the project folder. The QML/Python startup diagnostics are written to `%USERPROFILE%\.universal_media_studio\startup.log`; send that file when reporting a launch failure. When using a packaged executable, rebuild with `builder.bat` after pulling source changes.
 - **Separate streams fail to merge:** install FFmpeg and ensure `ffmpeg` is on PATH.
@@ -152,11 +153,13 @@ UniversalMediaStudio/
 
 ## Development checks
 
-Run the lightweight tests with:
+The repository does not currently include a `tests/` directory. Run a Python syntax check with:
 
 ```bash
-python -m unittest discover -s tests -v
+python -m compileall -q app.py ums
 ```
+
+Then launch `python app.py` (or the platform launcher) for a Qt/QML and provider smoke test. The compile check does not replace that runtime test.
 
 The project uses PySide6 (Qt for Python) for the GUI, yt-dlp for media extraction/downloads, and FFmpeg/ffprobe for local media processing.
 
