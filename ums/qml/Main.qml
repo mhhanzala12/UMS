@@ -916,13 +916,15 @@ ApplicationWindow {
             }
             background: Rectangle {
                 radius: 7
-                color: comboOption.hovered ? window.themeColors.panel2 : "transparent"
+                color: rowHitArea.containsMouse ? window.themeColors.panel2 : "transparent"
             }
             // Put a real click surface above the delegate's visual children.
             // This makes every pixel of the option row select the same item.
             MouseArea {
+                id: rowHitArea
                 anchors.fill: parent
                 z: 10
+                enabled: cb.enabled
                 acceptedButtons: Qt.LeftButton
                 hoverEnabled: true
                 preventStealing: false
