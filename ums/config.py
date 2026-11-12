@@ -136,9 +136,10 @@ def _normalise_settings(data: dict[str, Any]) -> tuple[dict[str, Any], list[str]
     repair("connection_mode", {"automatic": "Automatic", "proxy": "Proxy", "direct": "Direct"}.get(mode, "Automatic"))
 
     browser = _string(settings.get("cookies_browser"), "None", 24).casefold()
-    repair("cookies_browser", browser if browser in _BROWSER_NAMES else "none")
-    if settings["cookies_browser"] == "none":
-        repair("cookies_browser", "None")
+    # Persist the disabled choice with its public UI spelling ("None") rather
+    # than briefly normalising it to lowercase and logging a false repair.
+    browser_value = "None" if browser == "none" else (browser if browser in _BROWSER_NAMES else "None")
+    repair("cookies_browser", browser_value)
 
     repair("max_retries", _bounded_int(settings.get("max_retries"), 3, 0, 10))
     repair("fragment_concurrency", _bounded_int(settings.get("fragment_concurrency"), 4, 1, 16))
