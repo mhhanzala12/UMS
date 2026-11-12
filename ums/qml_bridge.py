@@ -498,6 +498,7 @@ class AppBridge(QObject):
         provider = "All" if provider in ("All catalogs", "All") else provider
         self.search_worker = CatalogSearchWorker(query, provider, kind, self)
         self.search_worker.progress.connect(lambda rows: self.searchResults.emit(json.dumps(rows)))
+        self.search_worker.warning.connect(lambda message: self._notify("Catalog warning: " + message))
         self.search_worker.completed.connect(self._search_done)
         self.search_worker.failed.connect(self._search_failed)
         self.search_worker.finished.connect(self._cleanup_finished_worker)
