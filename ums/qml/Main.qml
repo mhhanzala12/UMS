@@ -618,7 +618,7 @@ ApplicationWindow {
                     { icon: "close", action: "close" }
                 ]
                 delegate: Rectangle {
-                    width: 46; height: titleBar.height
+                    width: 52; height: titleBar.height
                     color: ctrlMouse.containsMouse ? (modelData.action === "close" ? "#c42b1c" : themeColors.panel2) : "transparent"
                     Icon {
                         anchors.centerIn: parent
@@ -629,7 +629,10 @@ ApplicationWindow {
                     MouseArea {
                         id: ctrlMouse
                         anchors.fill: parent
+                        z: 2
+                        acceptedButtons: Qt.LeftButton
                         hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
                         onClicked: {
                             if (modelData.action === "min") window.showMinimized()
                             else if (modelData.action === "max") window.toggleMaximize()
@@ -1098,8 +1101,8 @@ ApplicationWindow {
                         ]
                         delegate: Rectangle {
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 40
-                            radius: 9
+                            Layout.preferredHeight: 46
+                            radius: 10
                             readonly property bool current: page === modelData.name
                             color: current ? themeColors.activeBg : navMouse.containsMouse ? themeColors.hover : "transparent"
                             border.color: current ? themeColors.borderHi : "transparent"
@@ -1126,7 +1129,19 @@ ApplicationWindow {
                                     Text { id: badgeText; anchors.centerIn: parent; text: parent.pending; color: themeColors.muted; font.pixelSize: 10; font.weight: Font.DemiBold }
                                 }
                             }
-                            MouseArea { id: navMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: setPage(modelData.name) }
+                            MouseArea {
+                                id: navMouse
+                                anchors.fill: parent
+                                z: 5
+                                acceptedButtons: Qt.LeftButton
+                                preventStealing: true
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (window.page !== modelData.name)
+                                        window.setPage(modelData.name)
+                                }
+                            }
                             Behavior on color { ColorAnimation { duration: 160 } }
                         }
                     }
